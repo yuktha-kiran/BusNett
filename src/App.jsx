@@ -246,7 +246,7 @@ const updateOccupancy = (busNumber, newOccupancy) => {
                 className="busnett-logo"
                 style={{ width: "72px", height: "auto", objectFit: "contain" }}
               />
-              <p className="greeting">Good evening</p>
+              <p className="greeting">Hello there! </p>
             </div>
 
             <button
