@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from "react-leaflet";
 import L from "leaflet";
+import busnettLogo from "./assets/busnett-logo.png";
 import "leaflet/dist/leaflet.css";
 import {
   BusFront,
@@ -238,9 +239,13 @@ const updateOccupancy = (busNumber, newOccupancy) => {
       <div className="phone-shell">
 
         <header className="topbar">
-            <div>
-              <p className="greeting">Good evening 👋</p>
-              <h1>BUSNETT</h1>
+            <div className="brand-header">
+              <img
+                src={busnettLogo}
+                alt="BusNett"
+                className="busnett-logo"
+              />
+              <p className="greeting">Good evening</p>
             </div>
 
             <button
