@@ -14,7 +14,6 @@ import {
   Users,
   Star,
   Home,
-  Ticket,
   UserRound,
   ArrowLeft,
   Radio,
@@ -238,6 +237,21 @@ const updateOccupancy = (busNumber, newOccupancy) => {
     <div className="app">
       <div className="phone-shell">
 
+        <style>{`
+          .page-header,
+          .page-header h2,
+          .page-header h3 {
+            color: #0f172a !important;
+          }
+          .settings-list button {
+            color: #0f172a !important;
+          }
+          .settings-list button svg {
+            color: #28785f;
+            flex-shrink: 0;
+          }
+        `}</style>
+
         <header className="topbar">
             <div className="brand-header">
               <img
@@ -246,7 +260,7 @@ const updateOccupancy = (busNumber, newOccupancy) => {
                 className="busnett-logo"
                 style={{ width: "72px", height: "auto", objectFit: "contain" }}
               />
-              <p className="greeting">Hello there! </p>
+              <p className="greeting">Good evening</p>
             </div>
 
             <button
@@ -354,8 +368,6 @@ const updateOccupancy = (busNumber, newOccupancy) => {
           )}
 
           {activeScreen === "trips" && <TripsScreen />}
-          {activeScreen === "pass" && <PassScreen />}
-
           {activeScreen === "profile" && (
             <ProfileScreen />
           )}
@@ -376,13 +388,6 @@ const updateOccupancy = (busNumber, newOccupancy) => {
               label="Trips"
               active={activeTab === "trips"}
               onClick={() => goToTab("trips")}
-            />
-
-            <NavItem
-              icon={<Ticket size={21} />}
-              label="Pass"
-              active={activeTab === "pass"}
-              onClick={() => goToTab("pass")}
             />
 
             <NavItem
@@ -630,20 +635,13 @@ function HomeScreen({ buses, onSearch, lastSynced, onNearby, onSaved, from, to, 
       </section>
 
 
-      <section className="quick-actions">
+      <section className="quick-actions" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
 
         <button onClick={onNearby}>
           <div className="quick-icon">
             <Navigation size={19} />
           </div>
           <span>Nearby buses</span>
-        </button>
-
-        <button>
-          <div className="quick-icon">
-            <Ticket size={19} />
-          </div>
-          <span>My pass</span>
         </button>
 
         <button onClick={onSaved}>
@@ -2068,6 +2066,35 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
    LIVE TRACKING
 ========================= */
 
+
+const busMapIcon = L.divIcon({
+  className: "bus-map-marker",
+  html: `
+    <div style="
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: #16865b;
+      border: 3px solid #ffffff;
+      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.28);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    ">
+      <svg width="23" height="23" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M6 17V5.8C6 4.25 7.25 3 8.8 3H15.2C16.75 3 18 4.25 18 5.8V17" stroke="white" stroke-width="1.8" stroke-linecap="round"/>
+        <path d="M5 17H19L17.8 20H6.2L5 17Z" stroke="white" stroke-width="1.8" stroke-linejoin="round"/>
+        <path d="M8 7H16V11H8V7Z" stroke="white" stroke-width="1.8" stroke-linejoin="round"/>
+        <circle cx="8" cy="17" r="1.3" fill="white"/>
+        <circle cx="16" cy="17" r="1.3" fill="white"/>
+      </svg>
+    </div>
+  `,
+  iconSize: [42, 42],
+  iconAnchor: [21, 21],
+  popupAnchor: [0, -22],
+});
+
 function TrackingScreen({ bus, onBack }) {
   const [routeResults, setRouteResults] = useState([]);
 const [searchLoading, setSearchLsoading] = useState(false);
@@ -2234,7 +2261,7 @@ const currentLng =
       ]}
     />
 
-    <Marker position={[currentLat, currentLng]}>
+    <Marker position={[currentLat, currentLng]} icon={busMapIcon}>
 
       <Popup>
         <strong>BUSNETT</strong>
@@ -2702,71 +2729,6 @@ function TripsScreen() {
 
 
 /* =========================
-   PASS
-========================= */
-
-function PassScreen() {
-  return (
-    <>
-      <div className="page-header">
-
-        <span className="eyebrow">
-          DIGITAL PASS
-        </span>
-
-        <h2>My Bus Pass</h2>
-
-      </div>
-
-
-      <div className="pass-card">
-
-        <div className="pass-top">
-
-          <div>
-            <span>BUSNETT</span>
-            <h3>Student Pass</h3>
-          </div>
-
-          <Ticket size={28} />
-
-        </div>
-
-
-        <div className="pass-details">
-
-          <div>
-            <small>VALID UNTIL</small>
-            <strong>30 SEP 2026</strong>
-          </div>
-
-          <div>
-            <small>PASS TYPE</small>
-            <strong>MONTHLY</strong>
-          </div>
-
-        </div>
-
-
-        <div className="qr-placeholder">
-
-          <div className="qr-pattern">
-            ▦
-          </div>
-
-          <span>
-            Scan to verify pass
-          </span>
-
-        </div>
-
-      </div>
-    </>
-  );
-}
-
-
-/* =========================
    PROFILE
 ========================= */
 
@@ -2775,7 +2737,7 @@ function ProfileScreen() {
     <>
       <div className="page-header">
         <span className="eyebrow">ACCOUNT</span>
-        <h2>Profile</h2>
+        <h2 style={{ color: "#0f172a", margin: 0 }}>Profile</h2>
       </div>
 
       <div className="profile-card">
@@ -2827,25 +2789,27 @@ function ProfileScreen() {
 
       <div className="settings-list">
         <button>
-          <span>♡</span>
+          <Star size={18} />
           <span>Saved routes</span>
           <ChevronRight size={17} />
         </button>
 
         <button>
-          <span>🔔</span>
+          <Bell size={18} />
           <span>Notifications</span>
           <ChevronRight size={17} />
         </button>
 
         <button>
-          <span>♿</span>
+          <span style={{ display: "inline-flex" }} aria-hidden="true">
+            <Users size={18} />
+          </span>
           <span>Accessibility</span>
           <ChevronRight size={17} />
         </button>
 
         <button>
-          <span>🚨</span>
+          <AlertTriangle size={18} />
           <span>Emergency / SOS</span>
           <ChevronRight size={17} />
         </button>
