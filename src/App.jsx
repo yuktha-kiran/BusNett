@@ -250,6 +250,29 @@ const updateOccupancy = (busNumber, newOccupancy) => {
             color: #28785f;
             flex-shrink: 0;
           }
+          .phone-shell {
+            overflow-x: hidden;
+          }
+          .content {
+            padding-bottom: 18px !important;
+          }
+          .bottom-nav {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            width: 100% !important;
+            left: 0 !important;
+            right: 0 !important;
+            margin-left: 0 !important;
+            margin-right: 0 !important;
+            box-sizing: border-box !important;
+          }
+          .nav-item {
+            width: 100% !important;
+            min-width: 0 !important;
+            justify-content: center !important;
+          }
+          .bottom-nav + * {
+            margin-right: 0 !important;
+          }
         `}</style>
 
         <header className="topbar">
@@ -367,7 +390,6 @@ const updateOccupancy = (busNumber, newOccupancy) => {
             />
           )}
 
-          {activeScreen === "trips" && <TripsScreen />}
           {activeScreen === "profile" && (
             <ProfileScreen />
           )}
@@ -381,13 +403,6 @@ const updateOccupancy = (busNumber, newOccupancy) => {
               label="Home"
               active={activeTab === "home"}
               onClick={() => goToTab("home")}
-            />
-
-            <NavItem
-              icon={<BusFront size={21} />}
-              label="Trips"
-              active={activeTab === "trips"}
-              onClick={() => goToTab("trips")}
             />
 
             <NavItem
@@ -2068,7 +2083,7 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
 
 
 const busMapIcon = L.divIcon({
-  className: "bus-map-marker",
+  className: "bus-map-marker-visible",
   html: `
     <div style="
       width: 42px;
@@ -2524,206 +2539,6 @@ function NavItem({
       {icon}
       <span>{label}</span>
     </button>
-  );
-}
-
-
-/* =========================
-   TRIPS
-========================= */
-
-function TripsScreen() {
-  const trips = [
-    {
-      bus: "401K",
-      route: "Kengeri → Majestic",
-      date: "Today · 9:42 AM",
-      fare: "₹15",
-      status: "Completed",
-    },
-    {
-      bus: "500D",
-      route: "Kengeri → Vijayanagar",
-      date: "Yesterday · 6:18 PM",
-      fare: "₹18",
-      status: "Completed",
-    },
-    {
-      bus: "401K",
-      route: "Majestic → Kengeri",
-      date: "2 Sep · 5:34 PM",
-      fare: "₹15",
-      status: "Completed",
-    },
-  ];
-
-  return (
-    <>
-      <div className="page-header">
-        <span className="eyebrow">YOUR JOURNEY</span>
-        <h2>My Trips</h2>
-      </div>
-
-      <div
-        style={{
-          background: "#e8f7f0",
-          borderRadius: "18px",
-          padding: "14px",
-          marginBottom: "16px",
-        }}
-      >
-        <span
-          style={{
-            fontSize: "10px",
-            fontWeight: "800",
-            color: "#16865b",
-            letterSpacing: "0.8px",
-          }}
-        >
-          TRAVEL SUMMARY
-        </span>
-
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            marginTop: "10px",
-          }}
-        >
-          <div>
-            <strong style={{ fontSize: "20px", color: "#0f172a" }}>
-              3
-            </strong>
-            <div style={{ fontSize: "11px", color: "#64748b" }}>
-              Trips
-            </div>
-          </div>
-
-          <div>
-            <strong style={{ fontSize: "20px", color: "#0f172a" }}>
-              ₹48
-            </strong>
-            <div style={{ fontSize: "11px", color: "#64748b" }}>
-              Total fare
-            </div>
-          </div>
-
-          <div>
-            <strong style={{ fontSize: "20px", color: "#0f172a" }}>
-              38 km
-            </strong>
-            <div style={{ fontSize: "11px", color: "#64748b" }}>
-              Travelled
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="section-heading">
-        <div>
-          <span className="eyebrow">RECENT</span>
-          <h3>Journey history</h3>
-        </div>
-      </div>
-
-      <div className="bus-list">
-        {trips.map((trip, index) => (
-          <article
-            key={index}
-            style={{
-              background: "#ffffff",
-              border: "1px solid #e2e8f0",
-              borderRadius: "18px",
-              padding: "15px",
-              marginBottom: "10px",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "flex-start",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  gap: "11px",
-                  alignItems: "center",
-                }}
-              >
-                <div className="hero-bus-icon">
-                  <BusFront size={20} />
-                </div>
-
-                <div>
-                  <strong
-                    style={{
-                      display: "block",
-                      fontSize: "15px",
-                      color: "#0f172a",
-                    }}
-                  >
-                    {trip.bus}
-                  </strong>
-
-                  <span
-                    style={{
-                      fontSize: "12px",
-                      color: "#64748b",
-                    }}
-                  >
-                    {trip.route}
-                  </span>
-                </div>
-              </div>
-
-              <strong
-                style={{
-                  fontSize: "13px",
-                  color: "#0f172a",
-                }}
-              >
-                {trip.fare}
-              </strong>
-            </div>
-
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginTop: "13px",
-                paddingTop: "11px",
-                borderTop: "1px solid #f1f5f9",
-              }}
-            >
-              <span
-                style={{
-                  fontSize: "11px",
-                  color: "#64748b",
-                }}
-              >
-                {trip.date}
-              </span>
-
-              <span
-                style={{
-                  fontSize: "10px",
-                  fontWeight: "800",
-                  color: "#16865b",
-                  background: "#e8f7f0",
-                  padding: "5px 8px",
-                  borderRadius: "8px",
-                }}
-              >
-                ✓ {trip.status}
-              </span>
-            </div>
-          </article>
-        ))}
-      </div>
-    </>
   );
 }
 
