@@ -2602,33 +2602,46 @@ function ProfileScreen() {
         </p>
       </section>
 
-      <div className="settings-list">
-        <button>
-          <Star size={18} />
-          <span>Saved routes</span>
-          <ChevronRight size={17} />
-        </button>
+      <section style={{ marginTop: "18px" }}>
+        <div className="section-heading" style={{ marginBottom: "10px" }}>
+          <div>
+            <span className="eyebrow">APP FEATURES</span>
+            <h2 style={{ margin: "4px 0 0", color: "#0f172a" }}>App Features</h2>
+          </div>
+        </div>
 
-        <button>
-          <Bell size={18} />
-          <span>Notifications</span>
-          <ChevronRight size={17} />
-        </button>
-
-        <button>
-          <span style={{ display: "inline-flex" }} aria-hidden="true">
-            <Users size={18} />
-          </span>
-          <span>Accessibility</span>
-          <ChevronRight size={17} />
-        </button>
-
-        <button>
-          <AlertTriangle size={18} />
-          <span>Emergency / SOS</span>
-          <ChevronRight size={17} />
-        </button>
-      </div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+            gap: "10px",
+          }}
+        >
+          {[
+            "Live Tracking",
+            "Smart Occupancy",
+            "Route Search",
+            "Crowding Forecast",
+            "ETA Prediction",
+            "Nearby Stops",
+            "Smart Alerts",
+            "Emergency Support",
+          ].map((feature) => (
+            <div
+              key={feature}
+              style={{
+                padding: "12px 10px",
+                borderBottom: "1px solid #e2e8f0",
+                color: "#334155",
+                fontSize: "13px",
+                fontWeight: "700",
+              }}
+            >
+              {feature}
+            </div>
+          ))}
+        </div>
+      </section>
     </>
   );
 }
