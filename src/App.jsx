@@ -2605,7 +2605,6 @@ function ProfileScreen() {
       <section style={{ marginTop: "18px" }}>
         <div className="section-heading" style={{ marginBottom: "10px" }}>
           <div>
-            <span className="eyebrow">APP FEATURES</span>
             <h2 style={{ margin: "4px 0 0", color: "#0f172a" }}>App Features</h2>
           </div>
         </div>
