@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from "react-leaflet";
 import L from "leaflet";
 import busnettLogo from "./assets/busnett-logo.png";
@@ -114,6 +114,14 @@ const [busOccupancies, setBusOccupancies] = useState({
   });
 
   const [lastSynced, setLastSynced] = useState(new Date());
+  const [liveEtas, setLiveEtas] = useState({
+    "401K": 4,
+    "500D": 7,
+    "500A": 11,
+  });
+  const [arrivalAlert, setArrivalAlert] = useState(null);
+  const [arrivalAlertHistory, setArrivalAlertHistory] = useState([]);
+  const alertedBusesRef = useRef(new Set());
   const [savedRoutes, setSavedRoutes] = useState([
     { from: "Kengeri", to: "Majestic" },
   ]);
@@ -173,7 +181,7 @@ const [busOccupancies, setBusOccupancies] = useState({
   useEffect(() => {
     const syncCloudData = async () => {
       try {
-        const response = await fetch("${API_URL}/api/buses");
+        const response = await fetch(`${API_URL}/api/buses`);
 
         if (!response.ok) {
           throw new Error("Cloud API request failed");
@@ -204,6 +212,42 @@ const [busOccupancies, setBusOccupancies] = useState({
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setLiveEtas((previous) => {
+        const next = { ...previous };
+
+        Object.keys(next).forEach((busNumber) => {
+          if (next[busNumber] > 0) next[busNumber] -= 1;
+        });
+
+        const arrivingBus = buses.find(
+          (bus) => next[bus.number] === 1 && !alertedBusesRef.current.has(bus.number)
+        );
+
+        if (arrivingBus) {
+          alertedBusesRef.current.add(arrivingBus.number);
+          const alert = {
+            id: `${arrivingBus.number}-${Date.now()}`,
+            bus: arrivingBus.number,
+            from: searchFrom,
+            message: `${arrivingBus.number} is about to arrive at ${searchFrom}.`,
+            time: "Just now",
+          };
+          setArrivalAlert(alert);
+          setArrivalAlertHistory((previousHistory) => [
+            alert,
+            ...previousHistory,
+          ].slice(0, 5));
+        }
+
+        return next;
+      });
+    }, 60000);
+
+    return () => clearInterval(interval);
+  }, [searchFrom]);
+
   const goToTab = (tab) => {
     setActiveTab(tab);
     setActiveScreen(tab);
@@ -229,10 +273,11 @@ const updateOccupancy = (busNumber, newOccupancy) => {
 
   const smartRecommendation = getSmartRecommendation(liveBuses);
   const displayBuses = liveBuses.map((bus) => ({
-  ...bus,
-  recommended:
-    smartRecommendation?.bus?.number === bus.number,
-}));
+    ...bus,
+    eta: `${liveEtas[bus.number] ?? parseInt(bus.eta) ?? 0} min`,
+    recommended:
+      smartRecommendation?.bus?.number === bus.number,
+  }));
   return (
     <div className="app">
       <div className="phone-shell">
@@ -298,6 +343,64 @@ const updateOccupancy = (busNumber, newOccupancy) => {
 
         <main className="content">
 
+          {arrivalAlert && (
+            <div
+              role="alert"
+              style={{
+                position: "sticky",
+                top: "8px",
+                zIndex: 30,
+                display: "flex",
+                alignItems: "center",
+                gap: "11px",
+                background: "#0f172a",
+                color: "#ffffff",
+                borderRadius: "16px",
+                padding: "12px 13px",
+                marginBottom: "12px",
+                boxShadow: "0 10px 24px rgba(15,23,42,0.18)",
+              }}
+            >
+              <div
+                style={{
+                  width: "34px",
+                  height: "34px",
+                  flexShrink: 0,
+                  borderRadius: "11px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: "#e8f7f0",
+                  color: "#16865b",
+                }}
+              >
+                <Bell size={17} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <strong style={{ display: "block", fontSize: "13px" }}>
+                  Bus arrival alert
+                </strong>
+                <span style={{ display: "block", marginTop: "2px", fontSize: "11px", color: "#cbd5e1" }}>
+                  {arrivalAlert.message}
+                </span>
+              </div>
+              <button
+                onClick={() => setArrivalAlert(null)}
+                style={{
+                  border: "0",
+                  background: "transparent",
+                  color: "#cbd5e1",
+                  fontSize: "11px",
+                  fontWeight: "700",
+                  cursor: "pointer",
+                  padding: "5px",
+                }}
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
           {activeScreen === "home" && (
             <HomeScreen
               lastSynced={lastSynced}
@@ -355,6 +458,9 @@ const updateOccupancy = (busNumber, newOccupancy) => {
           {activeScreen === "notifications" && (
             <NotificationsScreen
               buses={displayBuses}
+              arrivalAlert={arrivalAlert}
+              arrivalAlertHistory={arrivalAlertHistory}
+              onDismissAlert={() => setArrivalAlert(null)}
               onBack={() => setActiveScreen("home")}
             />
           )}
@@ -1392,17 +1498,24 @@ function SavedRoutesScreen({ savedRoutes, onBack, onRemove, onSelect }) {
    NOTIFICATIONS
 ========================= */
 
-function NotificationsScreen({ buses, onBack }) {
+function NotificationsScreen({ buses, arrivalAlert, arrivalAlertHistory, onDismissAlert, onBack }) {
   const recommendation = getSmartRecommendation(buses);
   const bestBus = recommendation?.bus;
 
   const notifications = [
+    ...(arrivalAlertHistory || []).map((alert) => ({
+      icon: <Bell size={19} />,
+      title: `${alert.bus} is about to arrive`,
+      message: `Your bus is approaching ${alert.from}, your selected FROM stop.`,
+      time: alert.time,
+      unread: arrivalAlert?.id === alert.id,
+    })),
     {
       icon: <Clock3 size={19} />,
       title: `${bestBus?.number || "Your bus"} is approaching`,
       message: `${bestBus?.eta || "--"} away from Kengeri with an estimated ${bestBus?.occupancy ?? "--"}% occupancy.`,
-      time: "Just now",
-      unread: true,
+      time: "Live",
+      unread: !arrivalAlertHistory?.length,
     },
     {
       icon: <Users size={19} />,
@@ -1441,6 +1554,40 @@ function NotificationsScreen({ buses, onBack }) {
           <h2>Notifications</h2>
         </div>
       </div>
+
+      {arrivalAlert && (
+        <section
+          style={{
+            background: "#e8f7f0",
+            border: "1px solid #b7ead1",
+            borderRadius: "18px",
+            padding: "14px",
+            marginBottom: "12px",
+          }}
+        >
+          <strong style={{ display: "block", fontSize: "13px", color: "#0f172a" }}>
+            Arrival alert active
+          </strong>
+          <p style={{ margin: "5px 0 10px", fontSize: "11px", color: "#475569", lineHeight: 1.5 }}>
+            {arrivalAlert.bus} is about to arrive at {arrivalAlert.from}.
+          </p>
+          <button
+            onClick={onDismissAlert}
+            style={{
+              border: "0",
+              borderRadius: "10px",
+              padding: "8px 11px",
+              background: "#16865b",
+              color: "#ffffff",
+              fontSize: "11px",
+              fontWeight: "700",
+              cursor: "pointer",
+            }}
+          >
+            Dismiss alert
+          </button>
+        </section>
+      )}
 
       <section
         style={{
