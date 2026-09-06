@@ -244,6 +244,7 @@ const updateOccupancy = (busNumber, newOccupancy) => {
                 src={busnettLogo}
                 alt="BusNett"
                 className="busnett-logo"
+                style={{ width: "72px", height: "auto", objectFit: "contain" }}
               />
               <p className="greeting">Good evening</p>
             </div>
