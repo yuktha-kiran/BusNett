@@ -186,7 +186,19 @@ const [busOccupancies, setBusOccupancies] = useState({
   const [arrivalAlert, setArrivalAlert] = useState(null);
   const [arrivalAlertHistory, setArrivalAlertHistory] = useState([]);
   const alertedBusesRef = useRef(new Set());
-  const [savedRoutes, setSavedRoutes] = useState([]);
+
+  // Optional account feature. Core BUSNETT features work without login.
+  const [authMode, setAuthMode] = useState(null);
+  const [userAccount, setUserAccount] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("busnett_user")) || null;
+    } catch {
+      return null;
+    }
+  });
+  const [savedTrips, setSavedTrips] = useState([]);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState("");
 
   const searchRealRoutes = async (from, to) => {
     setSearchLoading(true);
@@ -315,6 +327,184 @@ const [busOccupancies, setBusOccupancies] = useState({
 
     return () => clearInterval(interval);
   }, [searchFrom]);
+
+  const loadSavedTrips = async (account = userAccount) => {
+    if (!account?.token) {
+      setSavedTrips([]);
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${API_URL}/api/users/${encodeURIComponent(account.id)}/trips`,
+        {
+          headers: {
+            Authorization: `Bearer ${account.token}`,
+          },
+        }
+      );
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setSavedTrips(data.trips || []);
+      }
+    } catch (error) {
+      console.error("BUSNETT saved trips load failed:", error);
+    }
+  };
+
+  useEffect(() => {
+    if (userAccount?.token) {
+      loadSavedTrips(userAccount);
+    } else {
+      setSavedTrips([]);
+    }
+  }, [userAccount]);
+
+  const handleAuth = async ({ mode, name, email, password }) => {
+    setAuthLoading(true);
+    setAuthError("");
+
+    try {
+      const response = await fetch(`${API_URL}/api/auth/${mode}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name,
+          email,
+          password,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Unable to continue.");
+      }
+
+      localStorage.setItem("busnett_user", JSON.stringify(data.user));
+      setUserAccount(data.user);
+      setAuthMode(null);
+      setAuthError("");
+      setActiveTab("profile");
+      setActiveScreen("profile");
+      await loadSavedTrips(data.user);
+    } catch (error) {
+      setAuthError(error.message || "Unable to continue.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("busnett_user");
+    setUserAccount(null);
+    setSavedTrips([]);
+    setAuthMode(null);
+    setAuthError("");
+  };
+
+  const requireAccount = () => {
+    setAuthError("");
+    setAuthMode("signup");
+  };
+
+  const saveCurrentTrip = async (bus) => {
+    if (!userAccount?.token) {
+      requireAccount();
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/api/trips`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${userAccount.token}`,
+        },
+        body: JSON.stringify({
+          from: bus.origin || searchFrom || "Selected stop",
+          to: bus.destination || searchTo || "Destination",
+          busNumber: bus.number,
+          routeId: bus.routeId || "",
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Unable to save this trip.");
+      }
+
+      setSavedTrips(data.trips || []);
+    } catch (error) {
+      console.error("BUSNETT save trip failed:", error);
+    }
+  };
+
+  const removeSavedTrip = async (tripId) => {
+    if (!userAccount?.token) return;
+
+    try {
+      const response = await fetch(
+        `${API_URL}/api/trips/${encodeURIComponent(tripId)}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${userAccount.token}`,
+          },
+        }
+      );
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setSavedTrips(data.trips || []);
+      }
+    } catch (error) {
+      console.error("BUSNETT remove trip failed:", error);
+    }
+  };
+
+  const trackSavedTrip = async (trip) => {
+    try {
+      const response = await fetch(`${API_URL}/api/buses`);
+
+      if (!response.ok) {
+        throw new Error("Live bus data unavailable.");
+      }
+
+      const data = await response.json();
+      const liveBus = (data.buses || []).find(
+        (bus) =>
+          String(bus.bus).toUpperCase() ===
+          String(trip.busNumber).toUpperCase()
+      );
+
+      if (!liveBus) {
+        setSearchError(
+          `${trip.busNumber} is not currently available in live tracking.`
+        );
+        return;
+      }
+
+      setSelectedBus({
+        ...liveBus,
+        number: liveBus.bus || trip.busNumber,
+        origin: liveBus.currentStop || trip.from,
+        destination: liveBus.headsign || trip.to,
+        eta: `${liveBus.eta ?? 0} min`,
+        occupancy: liveBus.occupancy ?? 0,
+        routeId: liveBus.routeId || trip.routeId,
+      });
+      setActiveScreen("tracking");
+    } catch (error) {
+      setSearchError(error.message || "Unable to load live bus data.");
+    }
+  };
 
   const goToTab = (tab) => {
     setActiveTab(tab);
@@ -629,6 +819,7 @@ const updateOccupancy = (busNumber, newOccupancy) => {
                 )
               }
               onSelect={() => setActiveScreen("search")}
+              onTrack={trackSavedTrip}
             />
           )}
 
@@ -637,6 +828,9 @@ const updateOccupancy = (busNumber, newOccupancy) => {
               bus={selectedBus}
               onBack={() => setActiveScreen("search")}
               onTrack={() => setActiveScreen("tracking")}
+              userAccount={userAccount}
+              onSaveTrip={saveCurrentTrip}
+              onRequireAuth={requireAccount}
             />
           )}
 
@@ -648,7 +842,37 @@ const updateOccupancy = (busNumber, newOccupancy) => {
           )}
 
           {activeScreen === "profile" && (
-            <ProfileScreen />
+            <ProfileScreen
+              userAccount={userAccount}
+              savedTrips={savedTrips}
+              onLogin={() => {
+                setAuthError("");
+                setAuthMode("login");
+              }}
+              onSignup={() => {
+                setAuthError("");
+                setAuthMode("signup");
+              }}
+              onLogout={handleLogout}
+              onOpenSaved={() => setActiveScreen("saved")}
+            />
+          )}
+
+          {authMode && (
+            <AuthScreen
+              mode={authMode}
+              loading={authLoading}
+              error={authError}
+              onBack={() => {
+                setAuthMode(null);
+                setAuthError("");
+              }}
+              onSwitch={() => {
+                setAuthError("");
+                setAuthMode(authMode === "login" ? "signup" : "login");
+              }}
+              onSubmit={handleAuth}
+            />
           )}
 
         </main>
@@ -1401,7 +1625,7 @@ function NearbyBusesScreen({ buses, onBack, onSelectBus, onTrackBus }) {
    SAVED ROUTES
 ========================= */
 
-function SavedRoutesScreen({ savedRoutes, onBack, onRemove, onSelect }) {
+function SavedRoutesScreen({ savedRoutes, onBack, onRemove, onSelect, onTrack }) {
   return (
     <>
       <div className="search-page-header">
@@ -1500,7 +1724,7 @@ function SavedRoutesScreen({ savedRoutes, onBack, onRemove, onSelect }) {
               color: "#64748b",
             }}
           >
-            Save your regular journeys here for quicker access.
+            Save bus trips from Bus Details to access their live data later.
           </p>
         </section>
       ) : (
@@ -1569,15 +1793,33 @@ function SavedRoutesScreen({ savedRoutes, onBack, onRemove, onSelect }) {
               </div>
 
               <button
-                onClick={onSelect}
+                onClick={() => onTrack(route)}
                 style={{
                   width: "100%",
                   marginTop: "13px",
                   border: "none",
-                  background: "#0f172a",
+                  background: "#16865b",
                   color: "#ffffff",
                   borderRadius: "10px",
                   padding: "10px",
+                  fontSize: "11px",
+                  fontWeight: "800",
+                  cursor: "pointer",
+                }}
+              >
+                Track this bus live
+              </button>
+
+              <button
+                onClick={() => onSelect(route)}
+                style={{
+                  width: "100%",
+                  marginTop: "8px",
+                  border: "1px solid #dbe3ea",
+                  background: "#ffffff",
+                  color: "#0f172a",
+                  borderRadius: "10px",
+                  padding: "9px",
                   fontSize: "11px",
                   fontWeight: "800",
                   cursor: "pointer",
@@ -2106,7 +2348,7 @@ function SearchScreen({
    BUS DETAILS
 ========================= */
 
-function BusDetailsScreen({ bus, onBack, onTrack }) {
+function BusDetailsScreen({ bus, onBack, onTrack, userAccount, onSaveTrip, onRequireAuth }) {
 
   const forecast = [
     {
@@ -2430,6 +2672,35 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
       >
         <Navigation size={18} />
         Track this bus live
+      </button>
+
+      <button
+        onClick={() => {
+          if (!userAccount) {
+            onRequireAuth();
+            return;
+          }
+          onSaveTrip(bus);
+        }}
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: "8px",
+          marginTop: "8px",
+          border: "1px solid #dbe3ea",
+          borderRadius: "12px",
+          padding: "11px 16px",
+          background: "#ffffff",
+          color: "#0f172a",
+          fontSize: "12px",
+          fontWeight: "800",
+          cursor: "pointer",
+        }}
+      >
+        <Star size={17} fill={userAccount ? "currentColor" : "none"} />
+        {userAccount ? "Save this trip" : "Sign in to save this trip"}
       </button>
 
     </>
@@ -2927,7 +3198,14 @@ function NavItem({
    PROFILE
 ========================= */
 
-function ProfileScreen() {
+function ProfileScreen({
+  userAccount,
+  savedTrips,
+  onLogin,
+  onSignup,
+  onLogout,
+  onOpenSaved,
+}) {
   return (
     <>
       <div className="page-header">
@@ -2936,13 +3214,177 @@ function ProfileScreen() {
       </div>
 
       <div className="profile-card">
-        <div className="profile-avatar">Y</div>
+        <div className="profile-avatar">
+          {userAccount?.name
+            ? userAccount.name.charAt(0).toUpperCase()
+            : "G"}
+        </div>
 
         <div>
-          <h3>BUSNETT Passenger</h3>
-          <p>Regular commuter</p>
+          <h3>{userAccount?.name || "BUSNETT Passenger"}</h3>
+          <p>
+            {userAccount
+              ? userAccount.email
+              : "Guest passenger"}
+          </p>
         </div>
       </div>
+
+      {!userAccount ? (
+        <section
+          style={{
+            background: "#e8f7f0",
+            borderRadius: "20px",
+            padding: "16px",
+            marginTop: "16px",
+            marginBottom: "16px",
+          }}
+        >
+          <span
+            style={{
+              display: "block",
+              color: "#16865b",
+              fontSize: "10px",
+              fontWeight: "800",
+              letterSpacing: "1px",
+            }}
+          >
+            EXTENDED FEATURE
+          </span>
+
+          <h3
+            style={{
+              margin: "6px 0 5px",
+              color: "#0f172a",
+              fontSize: "16px",
+            }}
+          >
+            Optional passenger account
+          </h3>
+
+          <p
+            style={{
+              margin: 0,
+              color: "#64748b",
+              fontSize: "11px",
+              lineHeight: 1.5,
+            }}
+          >
+            BUSNETT works without login. Create an account only if you
+            want to save trips and return to their live bus tracking.
+          </p>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "9px",
+              marginTop: "14px",
+            }}
+          >
+            <button
+              onClick={onLogin}
+              style={{
+                border: "1px solid #16865b",
+                background: "#ffffff",
+                color: "#16865b",
+                borderRadius: "10px",
+                padding: "10px",
+                fontSize: "11px",
+                fontWeight: "800",
+                cursor: "pointer",
+              }}
+            >
+              Log in
+            </button>
+
+            <button
+              onClick={onSignup}
+              style={{
+                border: "none",
+                background: "#16865b",
+                color: "#ffffff",
+                borderRadius: "10px",
+                padding: "10px",
+                fontSize: "11px",
+                fontWeight: "800",
+                cursor: "pointer",
+              }}
+            >
+              Sign up
+            </button>
+          </div>
+        </section>
+      ) : (
+        <section
+          style={{
+            background: "#e8f7f0",
+            borderRadius: "20px",
+            padding: "15px",
+            marginTop: "16px",
+            marginBottom: "16px",
+          }}
+        >
+          <span
+            style={{
+              display: "block",
+              color: "#16865b",
+              fontSize: "10px",
+              fontWeight: "800",
+              letterSpacing: "1px",
+            }}
+          >
+            ACCOUNT ACTIVE
+          </span>
+
+          <strong
+            style={{
+              display: "block",
+              marginTop: "5px",
+              color: "#0f172a",
+              fontSize: "14px",
+            }}
+          >
+            {savedTrips.length} saved {savedTrips.length === 1 ? "trip" : "trips"}
+          </strong>
+
+          <button
+            onClick={onOpenSaved}
+            style={{
+              marginTop: "12px",
+              width: "100%",
+              border: "none",
+              background: "#16865b",
+              color: "#ffffff",
+              borderRadius: "10px",
+              padding: "10px",
+              fontSize: "11px",
+              fontWeight: "800",
+              cursor: "pointer",
+            }}
+          >
+            View saved trips
+          </button>
+
+          <button
+            onClick={onLogout}
+            style={{
+              marginTop: "8px",
+              width: "100%",
+              border: "1px solid #dbe3ea",
+              background: "#ffffff",
+              color: "#475569",
+              borderRadius: "10px",
+              padding: "9px",
+              fontSize: "11px",
+              fontWeight: "800",
+              cursor: "pointer",
+            }}
+          >
+            Log out
+          </button>
+        </section>
+      )}
 
       <section
         style={{
@@ -2985,7 +3427,9 @@ function ProfileScreen() {
       <section style={{ marginTop: "18px" }}>
         <div className="section-heading" style={{ marginBottom: "10px" }}>
           <div>
-            <h2 style={{ margin: "4px 0 0", color: "#0f172a" }}>App Features</h2>
+            <h2 style={{ margin: "4px 0 0", color: "#0f172a" }}>
+              App Features
+            </h2>
           </div>
         </div>
 
@@ -3021,6 +3465,264 @@ function ProfileScreen() {
           ))}
         </div>
       </section>
+    </>
+  );
+}
+
+
+function AuthScreen({
+  mode,
+  loading,
+  error,
+  onBack,
+  onSwitch,
+  onSubmit,
+}) {
+  const isSignup = mode === "signup";
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    onSubmit({
+      mode,
+      name: name.trim(),
+      email: email.trim(),
+      password,
+    });
+  };
+
+  return (
+    <>
+      <div className="search-page-header">
+        <button className="back-button" onClick={onBack}>
+          <ArrowLeft size={20} />
+        </button>
+
+        <div>
+          <span className="eyebrow">
+            {isSignup ? "EXTENDED FEATURE" : "OPTIONAL ACCOUNT"}
+          </span>
+          <h2>{isSignup ? "Create account" : "Log in"}</h2>
+        </div>
+      </div>
+
+      <section
+        style={{
+          background: "#e8f7f0",
+          borderRadius: "20px",
+          padding: "16px",
+          marginBottom: "16px",
+        }}
+      >
+        <strong
+          style={{
+            display: "block",
+            color: "#0f172a",
+            fontSize: "15px",
+          }}
+        >
+          {isSignup
+            ? "Save trips and track them later."
+            : "Access your saved BUSNETT trips."}
+        </strong>
+
+        <p
+          style={{
+            margin: "7px 0 0",
+            color: "#64748b",
+            fontSize: "11px",
+            lineHeight: 1.5,
+          }}
+        >
+          {isSignup
+            ? "Login is optional. All core route, ETA, occupancy and tracking features remain available as a guest."
+            : "Your account is only needed for your saved-trip feature."}
+        </p>
+      </section>
+
+      <form onSubmit={handleSubmit}>
+        {isSignup && (
+          <div style={{ marginBottom: "12px" }}>
+            <label
+              style={{
+                display: "block",
+                marginBottom: "6px",
+                fontSize: "11px",
+                fontWeight: "800",
+                color: "#475569",
+              }}
+            >
+              NAME
+            </label>
+
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Enter your name"
+              required
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                border: "1px solid #dbe3ea",
+                borderRadius: "12px",
+                padding: "12px",
+                outline: "none",
+                fontSize: "13px",
+                color: "#0f172a",
+                background: "#ffffff",
+              }}
+            />
+          </div>
+        )}
+
+        <div style={{ marginBottom: "12px" }}>
+          <label
+            style={{
+              display: "block",
+              marginBottom: "6px",
+              fontSize: "11px",
+              fontWeight: "800",
+              color: "#475569",
+            }}
+          >
+            EMAIL
+          </label>
+
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Enter your email"
+            required
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              border: "1px solid #dbe3ea",
+              borderRadius: "12px",
+              padding: "12px",
+              outline: "none",
+              fontSize: "13px",
+              color: "#0f172a",
+              background: "#ffffff",
+            }}
+          />
+        </div>
+
+        <div style={{ marginBottom: "12px" }}>
+          <label
+            style={{
+              display: "block",
+              marginBottom: "6px",
+              fontSize: "11px",
+              fontWeight: "800",
+              color: "#475569",
+            }}
+          >
+            PASSWORD
+          </label>
+
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Enter your password"
+            minLength={6}
+            required
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              border: "1px solid #dbe3ea",
+              borderRadius: "12px",
+              padding: "12px",
+              outline: "none",
+              fontSize: "13px",
+              color: "#0f172a",
+              background: "#ffffff",
+            }}
+          />
+        </div>
+
+        {error && (
+          <div
+            style={{
+              background: "#fff7ed",
+              border: "1px solid #fed7aa",
+              color: "#9a3412",
+              borderRadius: "12px",
+              padding: "10px",
+              marginBottom: "12px",
+              fontSize: "11px",
+              lineHeight: 1.4,
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        <button
+          type="submit"
+          disabled={loading}
+          style={{
+            width: "100%",
+            border: "none",
+            borderRadius: "12px",
+            padding: "13px",
+            background: "#16865b",
+            color: "#ffffff",
+            fontSize: "13px",
+            fontWeight: "800",
+            cursor: loading ? "wait" : "pointer",
+            opacity: loading ? 0.7 : 1,
+          }}
+        >
+          {loading
+            ? "Please wait..."
+            : isSignup
+              ? "Create account"
+              : "Log in"}
+        </button>
+      </form>
+
+      <div
+        style={{
+          textAlign: "center",
+          marginTop: "15px",
+          fontSize: "11px",
+          color: "#64748b",
+        }}
+      >
+        {isSignup ? "Already have an account?" : "New to BUSNETT?"}
+
+        <button
+          type="button"
+          onClick={onSwitch}
+          style={{
+            border: "none",
+            background: "transparent",
+            color: "#16865b",
+            fontWeight: "800",
+            cursor: "pointer",
+            padding: "0 0 0 5px",
+            fontSize: "11px",
+          }}
+        >
+          {isSignup ? "Log in" : "Sign up"}
+        </button>
+      </div>
+
+      <p
+        style={{
+          textAlign: "center",
+          margin: "16px 10px 0",
+          fontSize: "10px",
+          lineHeight: 1.5,
+          color: "#94a3b8",
+        }}
+      >
+        You can continue using BUSNETT without creating an account.
+      </p>
     </>
   );
 }
