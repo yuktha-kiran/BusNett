@@ -29,6 +29,69 @@ import "./App.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
+/* =========================
+   DISTANCE-BASED BUS FARE
+========================= */
+
+function calculateDistanceKm(pointA, pointB) {
+  if (!pointA || !pointB) return 0;
+
+  const lat1 = Number(pointA.lat ?? pointA.latitude);
+  const lon1 = Number(pointA.lon ?? pointA.lng ?? pointA.longitude);
+  const lat2 = Number(pointB.lat ?? pointB.latitude);
+  const lon2 = Number(pointB.lon ?? pointB.lng ?? pointB.longitude);
+
+  if (
+    !Number.isFinite(lat1) ||
+    !Number.isFinite(lon1) ||
+    !Number.isFinite(lat2) ||
+    !Number.isFinite(lon2)
+  ) {
+    return 0;
+  }
+
+  const toRad = (value) => (value * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) ** 2;
+
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function calculateRouteDistanceKm(stops) {
+  if (!Array.isArray(stops) || stops.length < 2) return 0;
+
+  let distance = 0;
+
+  for (let i = 0; i < stops.length - 1; i++) {
+    distance += calculateDistanceKm(stops[i], stops[i + 1]);
+  }
+
+  return distance;
+}
+
+function getFareForDistance(distanceKm) {
+  if (distanceKm <= 0) return "Fare unavailable";
+  if (distanceKm <= 2) return "₹6";
+  if (distanceKm <= 4) return "₹12";
+  if (distanceKm <= 6) return "₹18";
+  if (distanceKm <= 8) return "₹23";
+  if (distanceKm <= 10) return "₹25";
+  if (distanceKm <= 15) return "₹26";
+  if (distanceKm <= 20) return "₹28";
+  if (distanceKm >= 40) return "₹32";
+
+  return "₹28";
+}
+
+
 const buses = [
   {
     number: "401K",
@@ -36,7 +99,7 @@ const buses = [
     eta: "4 min",
     occupancy: 32,
     duration: "28 min",
-    fare: "₹15",
+    fare: "Distance based",
     recommended: true,
   },
   {
@@ -45,7 +108,7 @@ const buses = [
     eta: "7 min",
     occupancy: 68,
     duration: "24 min",
-    fare: "₹18",
+    fare: "Distance based",
     recommended: false,
   },
   {
@@ -54,7 +117,7 @@ const buses = [
     eta: "11 min",
     occupancy: 48,
     duration: "31 min",
-    fare: "₹15",
+    fare: "Distance based",
     recommended: false,
   },
 ];
@@ -100,8 +163,8 @@ function App() {
  const [routeResults, setRouteResults] = useState([]);
 const [searchLoading, setSearchLoading] = useState(false);
 const [searchError, setSearchError] = useState("");
-  const [searchFrom, setSearchFrom] = useState("Kengeri");
-  const [searchTo, setSearchTo] = useState("Majestic");
+  const [searchFrom, setSearchFrom] = useState("");
+  const [searchTo, setSearchTo] = useState("");
 const [busOccupancies, setBusOccupancies] = useState({
   "401K": 32,
   "500D": 68,
@@ -122,9 +185,7 @@ const [busOccupancies, setBusOccupancies] = useState({
   const [arrivalAlert, setArrivalAlert] = useState(null);
   const [arrivalAlertHistory, setArrivalAlertHistory] = useState([]);
   const alertedBusesRef = useRef(new Set());
-  const [savedRoutes, setSavedRoutes] = useState([
-    { from: "Kengeri", to: "Majestic" },
-  ]);
+  const [savedRoutes, setSavedRoutes] = useState([]);
 
   const searchRealRoutes = async (from, to) => {
     setSearchLoading(true);
@@ -145,26 +206,32 @@ const [busOccupancies, setBusOccupancies] = useState({
         throw new Error(data.message || "Unable to find routes");
       }
 
-      const mappedRoutes = (data.directRoutes || []).map((route, index) => ({
-        number: route.routeNumber,
-        destination: to,
-        origin: from,
-        eta: `${4 + index * 3} min`,
-        occupancy: route.occupancy ?? 50,
-        duration: `${24 + index * 2} min`,
-        fare: "₹15",
-        recommended: false,
-        routeId: route.routeId,
-        routeName: route.routeName,
-        headsign: route.headsign,
-        directionId: route.directionId,
-        fromStop: route.from,
-        toStop: route.to,
-        numberOfStops: route.numberOfStops,
-        routeStops: route.stops,
-        dataSource: route.dataSource,
-        occupancySource: route.occupancySource,
-      }));
+      const mappedRoutes = (data.directRoutes || []).map((route, index) => {
+        const routeStops = route.stops || [];
+        const distanceKm = calculateRouteDistanceKm(routeStops);
+
+        return {
+          number: route.routeNumber,
+          destination: to,
+          origin: from,
+          eta: `${4 + index * 3} min`,
+          occupancy: route.occupancy ?? 50,
+          duration: `${24 + index * 2} min`,
+          fare: getFareForDistance(distanceKm),
+          distanceKm: distanceKm.toFixed(1),
+          recommended: false,
+          routeId: route.routeId,
+          routeName: route.routeName,
+          headsign: route.headsign,
+          directionId: route.directionId,
+          fromStop: route.from,
+          toStop: route.to,
+          numberOfStops: route.numberOfStops,
+          routeStops,
+          dataSource: route.dataSource,
+          occupancySource: route.occupancySource,
+        };
+      });
 
       setRouteResults(mappedRoutes);
     } catch (error) {
@@ -299,7 +366,23 @@ const updateOccupancy = (busNumber, newOccupancy) => {
             overflow-x: hidden;
           }
           .content {
-            padding-bottom: 18px !important;
+            padding-bottom: 96px !important;
+          }
+
+          .forecast-section {
+            margin-bottom: 12px !important;
+          }
+
+          .forecast-list {
+            gap: 6px !important;
+          }
+
+          .forecast-item {
+            padding: 8px 0 !important;
+          }
+
+          .track-button {
+            margin-bottom: 8px !important;
           }
           .bottom-nav {
             grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
@@ -320,25 +403,92 @@ const updateOccupancy = (busNumber, newOccupancy) => {
           }
         `}</style>
 
-        <header className="topbar">
-            <div className="brand-header">
+        <header
+          className="topbar"
+          style={{
+            alignItems: "center",
+            paddingTop: "12px",
+            paddingBottom: "12px",
+          }}
+        >
+          <div
+            className="brand-header"
+            style={{
+              display: "flex",
+              flexDirection: "row",
+              alignItems: "center",
+              gap: "10px",
+              minWidth: 0,
+            }}
+          >
+            <div
+              style={{
+                width: "52px",
+                height: "52px",
+                overflow: "hidden",
+                flexShrink: 0,
+                position: "relative",
+              }}
+            >
               <img
                 src={busnettLogo}
-                alt="BusNett"
+                alt="BusNett logo"
                 className="busnett-logo"
-                style={{ width: "72px", height: "auto", objectFit: "contain" }}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "72px",
+                  height: "72px",
+                  maxWidth: "none",
+                  objectFit: "contain",
+                  objectPosition: "top left",
+                }}
               />
-              <p className="greeting">Good evening</p>
             </div>
 
-            <button
-              className="icon-button"
-              onClick={() => setActiveScreen("notifications")}
-              aria-label="Open notifications"
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "center",
+              }}
             >
-              <Bell size={21} />
-              <span className="notification-dot" />
-            </button>
+              <strong
+                style={{
+                  fontSize: "22px",
+                  lineHeight: 1,
+                  letterSpacing: "-0.6px",
+                  color: "#0f3d78",
+                  fontWeight: "800",
+                }}
+              >
+                <span style={{ color: "#0f3d78" }}>Bus</span>
+                <span style={{ color: "#159b63" }}>Nett</span>
+              </strong>
+
+              <span
+                style={{
+                  marginTop: "5px",
+                  fontSize: "10px",
+                  fontWeight: "700",
+                  color: "#64748b",
+                  letterSpacing: "0.2px",
+                }}
+              >
+                Plan your journey smarter
+              </span>
+            </div>
+          </div>
+
+          <button
+            className="icon-button"
+            onClick={() => setActiveScreen("notifications")}
+            aria-label="Open notifications"
+          >
+            <Bell size={21} />
+            <span className="notification-dot" />
+          </button>
         </header>
 
         <main className="content">
@@ -679,24 +829,6 @@ function HomeScreen({ buses, onSearch, lastSynced, onNearby, onSaved, from, to, 
           })}
         </span>
       </div>
-
-      <section className="location-card">
-
-        <div className="location-row">
-
-          <MapPin size={18} />
-
-          <div>
-            <span>Current location</span>
-            <strong>Kengeri</strong>
-          </div>
-
-          <ChevronRight size={18} />
-
-        </div>
-
-      </section>
-
 
       <section className="search-card">
 
@@ -1052,7 +1184,7 @@ function NearbyBusesScreen({ buses, onBack, onSelectBus, onTrackBus }) {
             color: "#64748b",
           }}
         >
-          Buses approaching your nearby stop, powered by BUSNETT's
+          Buses approaching nearby stops, powered by BUSNETT's
           cloud-synced transit data.
         </p>
       </section>
@@ -1513,7 +1645,13 @@ function NotificationsScreen({ buses, arrivalAlert, arrivalAlertHistory, onDismi
     {
       icon: <Clock3 size={19} />,
       title: `${bestBus?.number || "Your bus"} is approaching`,
-      message: `${bestBus?.eta || "--"} away from Kengeri with an estimated ${bestBus?.occupancy ?? "--"}% occupancy.`,
+      message: bestBus
+        ? `${bestBus.eta || "--"} away from ${
+            bestBus.origin || "your selected stop"
+          } with an estimated ${
+            bestBus.occupancy ?? "--"
+          }% occupancy.`
+        : "Live bus information is currently unavailable.",
       time: "Live",
       unread: !arrivalAlertHistory?.length,
     },
@@ -1772,8 +1910,8 @@ function SearchScreen({
   onBack,
   onSelectBus,
 }) {
-  const [from, setFrom] = useState(initialFrom || "Kengeri");
-  const [to, setTo] = useState(initialTo || "Majestic");
+  const [from, setFrom] = useState(initialFrom || "");
+  const [to, setTo] = useState(initialTo || "");
   const recommendation = getSmartRecommendation(buses);
 
   const handleSearch = () => {
@@ -1794,8 +1932,13 @@ function SearchScreen({
         </button>
 
         <div>
-          <span className="eyebrow">YOUR ROUTE</span>
-          <h2>Find a bus</h2>
+          <span
+            className="eyebrow"
+            style={{ color: "#16865b" }}
+          >
+            YOUR ROUTE
+          </span>
+          <h2 style={{ color: "#0f172a" }}>Find a bus</h2>
         </div>
       </div>
 
@@ -2021,10 +2164,23 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
       </div>
 
 
-      <section className="bus-hero">
+      <section
+        className="bus-hero"
+        style={{
+          padding: "13px 15px",
+          marginBottom: "12px",
+        }}
+      >
 
-        <div className="hero-bus-icon">
-          <BusFront size={30} />
+        <div
+          className="hero-bus-icon"
+          style={{
+            width: "48px",
+            height: "48px",
+            flexShrink: 0,
+          }}
+        >
+          <BusFront size={25} />
         </div>
 
         <div className="hero-bus-info">
@@ -2042,13 +2198,21 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
       </section>
 
 
-      <section className="occupancy-card">
+      <section
+        className="occupancy-card"
+        style={{
+          padding: "13px 15px",
+          marginBottom: "12px",
+        }}
+      >
 
         <div className="occupancy-heading">
 
           <div>
             <span>ESTIMATED OCCUPANCY</span>
-            <h3>{bus.occupancy}%</h3>
+            <h3 style={{ fontSize: "28px", margin: "3px 0 0" }}>
+              {bus.occupancy}%
+            </h3>
           </div>
 
           <Users size={24} />
@@ -2075,9 +2239,19 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
       </section>
 
 
-      <section className="forecast-section">
+      <section
+        className="forecast-section"
+        style={{
+          marginBottom: "12px",
+        }}
+      >
 
-        <div className="section-heading">
+        <div
+          className="section-heading"
+          style={{
+            marginBottom: "8px",
+          }}
+        >
 
           <div>
             <span className="eyebrow">
@@ -2141,9 +2315,9 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
         style={{
           background: "#f8fafc",
           border: "1px solid #e2e8f0",
-          borderRadius: "18px",
-          padding: "15px",
-          marginBottom: "16px",
+          borderRadius: "16px",
+          padding: "12px 14px",
+          marginBottom: "12px",
         }}
       >
         <div
@@ -2179,9 +2353,25 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
       </section>
 
 
-      <section className="take-bus-card">
+      <section
+        className="take-bus-card"
+        style={{
+          padding: "13px 15px",
+          marginBottom: "12px",
+          display: "flex",
+          alignItems: "center",
+          gap: "12px",
+        }}
+      >
 
-        <div className="take-icon">
+        <div
+          className="take-icon"
+          style={{
+            width: "50px",
+            height: "50px",
+            flexShrink: 0,
+          }}
+        >
 
           <Star
             size={21}
@@ -2194,11 +2384,11 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
 
           <span>SMART DECISION</span>
 
-          <h3>
+          <h3 style={{ margin: "3px 0 4px", fontSize: "17px" }}>
             Should I take this bus?
           </h3>
 
-          <p>
+          <p style={{ margin: 0, fontSize: "12px", lineHeight: 1.4 }}>
             {bus.occupancy < 50
               ? "Yes — this bus has plenty of available space."
               : bus.occupancy < 70
@@ -2214,6 +2404,23 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
       <button
         className="track-button"
         onClick={onTrack}
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: "8px",
+          marginTop: "4px",
+          marginBottom: "4px",
+          border: "none",
+          borderRadius: "12px",
+          padding: "12px 16px",
+          background: "#16865b",
+          color: "#ffffff",
+          fontSize: "13px",
+          fontWeight: "800",
+          cursor: "pointer",
+        }}
       >
         <Navigation size={18} />
         Track this bus live
@@ -2263,30 +2470,53 @@ const [searchLoading, setSearchLsoading] = useState(false);
 const [searchError, setSearchError] = useState("");
   const [liveEta, setLiveEta] = useState(parseInt(bus.eta) || 4);
   const [busProgress, setBusProgress] = useState(45);
-  const routePoints = [
-  [12.9345, 77.4847], // Kengeri
-  [12.9365, 77.5000],
-  [12.9500, 77.5350], // RR Nagar
-  [12.9610, 77.5650], // Vijayanagar
-  [12.9716, 77.5946], // Majestic
-];
+  const routePoints = Array.isArray(bus.routeStops)
+  ? bus.routeStops
+      .map((stop) => {
+        const lat = Number(stop.lat ?? stop.latitude);
+        const lng = Number(
+          stop.lon ?? stop.lng ?? stop.longitude
+        );
+
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          return null;
+        }
+
+        return [lat, lng];
+      })
+      .filter(Boolean)
+  : [];
+
+const safeRoutePoints =
+  routePoints.length >= 2
+    ? routePoints
+    : [
+        [12.9716, 77.5946],
+        [12.9716, 77.5946],
+      ];
 
 const routeIndex = Math.min(
-  Math.floor((busProgress / 100) * (routePoints.length - 1)),
-  routePoints.length - 2
+  Math.floor(
+    (busProgress / 100) * (safeRoutePoints.length - 1)
+  ),
+  safeRoutePoints.length - 2
 );
 
 const segmentProgress =
-  (busProgress / 100) * (routePoints.length - 1) - routeIndex;
+  (busProgress / 100) *
+    (safeRoutePoints.length - 1) -
+  routeIndex;
 
 const currentLat =
-  routePoints[routeIndex][0] +
-  (routePoints[routeIndex + 1][0] - routePoints[routeIndex][0]) *
+  safeRoutePoints[routeIndex][0] +
+  (safeRoutePoints[routeIndex + 1][0] -
+    safeRoutePoints[routeIndex][0]) *
     segmentProgress;
 
 const currentLng =
-  routePoints[routeIndex][1] +
-  (routePoints[routeIndex + 1][1] - routePoints[routeIndex][1]) *
+  safeRoutePoints[routeIndex][1] +
+  (safeRoutePoints[routeIndex + 1][1] -
+    safeRoutePoints[routeIndex][1]) *
     segmentProgress;
     useEffect(() => {
     const interval = setInterval(() => {
@@ -2296,24 +2526,22 @@ const currentLng =
 
     return () => clearInterval(interval);
   }, []);
-  const stops = [
-    {
-      name: "Kengeri",
-      status: "Passed",
-    },
-    {
-      name: "RR Nagar",
-      status: "Current location",
-    },
-    {
-      name: "Vijayanagar",
-      status: "Upcoming",
-    },
-    {
-      name: "Majestic",
-      status: "Destination",
-    },
-  ];
+  const stops = Array.isArray(bus.routeStops)
+    ? bus.routeStops.slice(0, 8).map((stop, index, list) => ({
+        name:
+          stop.name ||
+          stop.stopName ||
+          `Stop ${index + 1}`,
+        status:
+          index === 0
+            ? "Starting stop"
+            : index === list.length - 1
+            ? "Destination"
+            : index === 1
+            ? "Current route"
+            : "Upcoming",
+      }))
+    : [];
 
   return (
     <>
@@ -2404,7 +2632,11 @@ const currentLng =
   }}
 >
   <MapContainer
-    center={[12.9716, 77.5946]}
+    center={
+      routePoints.length > 0
+        ? routePoints[Math.floor(routePoints.length / 2)]
+        : [12.9716, 77.5946]
+    }
     zoom={12}
     style={{ height: "100%", width: "100%" }}
   >
@@ -2413,15 +2645,9 @@ const currentLng =
       url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
     />
 
-    <Polyline
-      positions={[
-        [12.9345, 77.4847],
-        [12.9365, 77.5000],
-        [12.9500, 77.5350],
-        [12.9610, 77.5650],
-        [12.9716, 77.5946],
-      ]}
-    />
+    {routePoints.length >= 2 && (
+      <Polyline positions={routePoints} />
+    )}
 
     <Marker position={[currentLat, currentLng]} icon={busMapIcon}>
 
@@ -2459,7 +2685,7 @@ const currentLng =
           <div>
 
             <span>
-              ARRIVING AT MAJESTIC
+              ARRIVING AT {(bus.destination || "DESTINATION").toUpperCase()}
             </span>
 
             <h3>
@@ -2480,7 +2706,8 @@ const currentLng =
             fontSize: "13px",
           }}
         >
-          Route 401K · Kengeri → Majestic
+          {bus.number} · {bus.origin || "Selected stop"} →{" "}
+          {bus.destination || "Destination"}
         </div>
 
       </section>
