@@ -187,14 +187,6 @@ const [busOccupancies, setBusOccupancies] = useState({
   const [arrivalAlertHistory, setArrivalAlertHistory] = useState([]);
   const alertedBusesRef = useRef(new Set());
   const [savedRoutes, setSavedRoutes] = useState([]);
-  const [authUser, setAuthUser] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem("busnettUser")) || null;
-    } catch {
-      return null;
-    }
-  });
-  const [authScreen, setAuthScreen] = useState(null);
 
   const searchRealRoutes = async (from, to) => {
     setSearchLoading(true);
@@ -656,27 +648,7 @@ const updateOccupancy = (busNumber, newOccupancy) => {
           )}
 
           {activeScreen === "profile" && (
-            <ProfileScreen
-              user={authUser}
-              onLogin={() => setAuthScreen("login")}
-              onSignup={() => setAuthScreen("signup")}
-              onLogout={() => {
-                localStorage.removeItem("busnettUser");
-                setAuthUser(null);
-              }}
-            />
-          )}
-
-          {authScreen && (
-            <AuthScreen
-              mode={authScreen}
-              onBack={() => setAuthScreen(null)}
-              onSuccess={(user) => {
-                localStorage.setItem("busnettUser", JSON.stringify(user));
-                setAuthUser(user);
-                setAuthScreen(null);
-              }}
-            />
+            <ProfileScreen />
           )}
 
         </main>
@@ -2955,106 +2927,22 @@ function NavItem({
    PROFILE
 ========================= */
 
-function ProfileScreen({ user, onLogin, onSignup, onLogout }) {
+function ProfileScreen() {
   return (
     <>
       <div className="page-header">
         <span className="eyebrow">ACCOUNT</span>
-        <h2>Profile</h2>
+        <h2 style={{ color: "#0f172a", margin: 0 }}>Profile</h2>
       </div>
 
       <div className="profile-card">
-        <div className="profile-avatar">
-          {user?.name?.charAt(0)?.toUpperCase() || "G"}
-        </div>
+        <div className="profile-avatar">Y</div>
 
         <div>
-          <h3>{user?.name || "Guest Passenger"}</h3>
-          <p>{user?.email || "Continue without an account"}</p>
+          <h3>BUSNETT Passenger</h3>
+          <p>Regular commuter</p>
         </div>
       </div>
-
-      {!user ? (
-        <section
-          style={{
-            background: "#f8fafc",
-            border: "1px solid #e2e8f0",
-            borderRadius: "18px",
-            padding: "16px",
-            marginTop: "16px",
-          }}
-        >
-          <strong style={{ color: "#0f172a", fontSize: "14px" }}>
-            Sign in when you need it
-          </strong>
-          <p
-            style={{
-              margin: "6px 0 14px",
-              color: "#64748b",
-              fontSize: "12px",
-              lineHeight: 1.5,
-            }}
-          >
-            An account is optional. Sign up to keep your BUSNETT profile
-            available across sessions.
-          </p>
-
-          <div style={{ display: "flex", gap: "8px" }}>
-            <button
-              onClick={onLogin}
-              style={{
-                flex: 1,
-                border: "none",
-                borderRadius: "10px",
-                padding: "10px",
-                background: "#0f172a",
-                color: "#fff",
-                fontSize: "11px",
-                fontWeight: "800",
-                cursor: "pointer",
-              }}
-            >
-              Login
-            </button>
-
-            <button
-              onClick={onSignup}
-              style={{
-                flex: 1,
-                border: "1px solid #dbe3ea",
-                borderRadius: "10px",
-                padding: "10px",
-                background: "#fff",
-                color: "#0f172a",
-                fontSize: "11px",
-                fontWeight: "800",
-                cursor: "pointer",
-              }}
-            >
-              Sign up
-            </button>
-          </div>
-        </section>
-      ) : (
-        <button
-          onClick={onLogout}
-          style={{
-            width: "100%",
-            marginTop: "16px",
-            border: "1px solid #e2e8f0",
-            borderRadius: "12px",
-            padding: "11px",
-            background: "#fff",
-            color: "#0f172a",
-            fontSize: "11px",
-            fontWeight: "800",
-            cursor: "pointer",
-          }}
-        >
-          <LogOut size={15} style={{ verticalAlign: "middle", marginRight: "6px" }} />
-          Log out
-        </button>
-      )}
 
       <section
         style={{
@@ -3094,225 +2982,48 @@ function ProfileScreen({ user, onLogin, onSignup, onLogout }) {
         </p>
       </section>
 
-      <div className="settings-list">
-        <button>
-          <span>♡</span>
-          <span>Saved routes</span>
-          <ChevronRight size={17} />
-        </button>
+      <section style={{ marginTop: "18px" }}>
+        <div className="section-heading" style={{ marginBottom: "10px" }}>
+          <div>
+            <h2 style={{ margin: "4px 0 0", color: "#0f172a" }}>App Features</h2>
+          </div>
+        </div>
 
-        <button>
-          <span>🔔</span>
-          <span>Notifications</span>
-          <ChevronRight size={17} />
-        </button>
-
-        <button>
-          <span>♿</span>
-          <span>Accessibility</span>
-          <ChevronRight size={17} />
-        </button>
-
-        <button>
-          <span>🚨</span>
-          <span>Emergency / SOS</span>
-          <ChevronRight size={17} />
-        </button>
-      </div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+            gap: "10px",
+          }}
+        >
+          {[
+            "Live Tracking",
+            "Smart Occupancy",
+            "Route Search",
+            "Crowding Forecast",
+            "ETA Prediction",
+            "Nearby Stops",
+            "Smart Alerts",
+            "Emergency Support",
+          ].map((feature) => (
+            <div
+              key={feature}
+              style={{
+                padding: "12px 10px",
+                borderBottom: "1px solid #e2e8f0",
+                color: "#334155",
+                fontSize: "13px",
+                fontWeight: "700",
+              }}
+            >
+              {feature}
+            </div>
+          ))}
+        </div>
+      </section>
     </>
   );
 }
-
-/* =========================
-   OPTIONAL AUTH
-========================= */
-
-function AuthScreen({ mode, onBack, onSuccess }) {
-  const [isLogin, setIsLogin] = useState(mode === "login");
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [error, setError] = useState("");
-
-  const submit = (event) => {
-    event.preventDefault();
-    setError("");
-
-    if (!email.trim() || !password) {
-      setError("Please enter your email and password.");
-      return;
-    }
-
-    if (!isLogin && !name.trim()) {
-      setError("Please enter your name.");
-      return;
-    }
-
-    if (!isLogin && password !== confirmPassword) {
-      setError("Passwords do not match.");
-      return;
-    }
-
-    // Basic demo backend: persist the account locally.
-    // This can later be replaced with POST /api/auth/login and /api/auth/signup.
-    const stored = JSON.parse(localStorage.getItem("busnettAccount") || "null");
-
-    if (isLogin) {
-      if (!stored || stored.email !== email.trim() || stored.password !== password) {
-        setError("Invalid email or password.");
-        return;
-      }
-      onSuccess({ name: stored.name, email: stored.email });
-      return;
-    }
-
-    const account = {
-      name: name.trim(),
-      email: email.trim(),
-      password,
-    };
-
-    localStorage.setItem("busnettAccount", JSON.stringify(account));
-    onSuccess({ name: account.name, email: account.email });
-  };
-
-  return (
-    <section>
-      <div className="search-page-header">
-        <button className="back-button" onClick={onBack}>
-          <ArrowLeft size={20} />
-        </button>
-
-        <div>
-          <span className="eyebrow">OPTIONAL ACCOUNT</span>
-          <h2>{isLogin ? "Login" : "Create account"}</h2>
-        </div>
-      </div>
-
-      <form
-        onSubmit={submit}
-        style={{
-          background: "#ffffff",
-          border: "1px solid #e2e8f0",
-          borderRadius: "20px",
-          padding: "18px",
-        }}
-      >
-        {!isLogin && (
-          <label style={{ display: "block", marginBottom: "13px" }}>
-            <span style={{ display: "block", fontSize: "11px", fontWeight: "800", color: "#64748b", marginBottom: "6px" }}>
-              NAME
-            </span>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Your name"
-              style={authInputStyle}
-            />
-          </label>
-        )}
-
-        <label style={{ display: "block", marginBottom: "13px" }}>
-          <span style={{ display: "block", fontSize: "11px", fontWeight: "800", color: "#64748b", marginBottom: "6px" }}>
-            EMAIL
-          </span>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@example.com"
-            style={authInputStyle}
-          />
-        </label>
-
-        <label style={{ display: "block", marginBottom: "13px" }}>
-          <span style={{ display: "block", fontSize: "11px", fontWeight: "800", color: "#64748b", marginBottom: "6px" }}>
-            PASSWORD
-          </span>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
-            style={authInputStyle}
-          />
-        </label>
-
-        {!isLogin && (
-          <label style={{ display: "block", marginBottom: "13px" }}>
-            <span style={{ display: "block", fontSize: "11px", fontWeight: "800", color: "#64748b", marginBottom: "6px" }}>
-              CONFIRM PASSWORD
-            </span>
-            <input
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="Confirm password"
-              style={authInputStyle}
-            />
-          </label>
-        )}
-
-        {error && (
-          <p style={{ color: "#b91c1c", fontSize: "11px", margin: "0 0 12px" }}>
-            {error}
-          </p>
-        )}
-
-        <button
-          type="submit"
-          style={{
-            width: "100%",
-            border: "none",
-            borderRadius: "11px",
-            padding: "12px",
-            background: "#0f172a",
-            color: "#ffffff",
-            fontSize: "12px",
-            fontWeight: "800",
-            cursor: "pointer",
-          }}
-        >
-          {isLogin ? "Login" : "Create account"}
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            setIsLogin((value) => !value);
-            setError("");
-          }}
-          style={{
-            width: "100%",
-            marginTop: "10px",
-            border: "none",
-            background: "transparent",
-            color: "#16865b",
-            fontSize: "11px",
-            fontWeight: "800",
-            cursor: "pointer",
-          }}
-        >
-          {isLogin
-            ? "New to BUSNETT? Create an account"
-            : "Already have an account? Login"}
-        </button>
-      </form>
-    </section>
-  );
-}
-
-const authInputStyle = {
-  width: "100%",
-  boxSizing: "border-box",
-  border: "1px solid #dbe3ea",
-  borderRadius: "10px",
-  padding: "11px",
-  outline: "none",
-  fontSize: "13px",
-  color: "#0f172a",
-};
 
 
 export default App;
