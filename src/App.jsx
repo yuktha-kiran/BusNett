@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from "react-leaflet";
 import L from "leaflet";
-import busnettLogo from "./assets/busnett-logo.png";
 import "leaflet/dist/leaflet.css";
 import {
   BusFront,
@@ -14,6 +13,7 @@ import {
   Users,
   Star,
   Home,
+  Ticket,
   UserRound,
   ArrowLeft,
   Radio,
@@ -24,74 +24,8 @@ import {
   TrendingUp,
   Gauge,
   RefreshCw,
-  ArrowUpDown,
 } from "lucide-react";
 import "./App.css";
-
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
-
-/* =========================
-   DISTANCE-BASED BUS FARE
-========================= */
-
-function calculateDistanceKm(pointA, pointB) {
-  if (!pointA || !pointB) return 0;
-
-  const lat1 = Number(pointA.lat ?? pointA.latitude);
-  const lon1 = Number(pointA.lon ?? pointA.lng ?? pointA.longitude);
-  const lat2 = Number(pointB.lat ?? pointB.latitude);
-  const lon2 = Number(pointB.lon ?? pointB.lng ?? pointB.longitude);
-
-  if (
-    !Number.isFinite(lat1) ||
-    !Number.isFinite(lon1) ||
-    !Number.isFinite(lat2) ||
-    !Number.isFinite(lon2)
-  ) {
-    return 0;
-  }
-
-  const toRad = (value) => (value * Math.PI) / 180;
-  const earthRadiusKm = 6371;
-
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) *
-      Math.cos(toRad(lat2)) *
-      Math.sin(dLon / 2) ** 2;
-
-  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function calculateRouteDistanceKm(stops) {
-  if (!Array.isArray(stops) || stops.length < 2) return 0;
-
-  let distance = 0;
-
-  for (let i = 0; i < stops.length - 1; i++) {
-    distance += calculateDistanceKm(stops[i], stops[i + 1]);
-  }
-
-  return distance;
-}
-
-function getFareForDistance(distanceKm) {
-  if (distanceKm <= 0) return "Fare unavailable";
-  if (distanceKm <= 2) return "₹6";
-  if (distanceKm <= 4) return "₹12";
-  if (distanceKm <= 6) return "₹18";
-  if (distanceKm <= 8) return "₹23";
-  if (distanceKm <= 10) return "₹25";
-  if (distanceKm <= 15) return "₹26";
-  if (distanceKm <= 20) return "₹28";
-  if (distanceKm >= 40) return "₹32";
-
-  return "₹28";
-}
-
 
 const buses = [
   {
@@ -100,7 +34,7 @@ const buses = [
     eta: "4 min",
     occupancy: 32,
     duration: "28 min",
-    fare: "Distance based",
+    fare: "₹15",
     recommended: true,
   },
   {
@@ -109,7 +43,7 @@ const buses = [
     eta: "7 min",
     occupancy: 68,
     duration: "24 min",
-    fare: "Distance based",
+    fare: "₹18",
     recommended: false,
   },
   {
@@ -118,7 +52,7 @@ const buses = [
     eta: "11 min",
     occupancy: 48,
     duration: "31 min",
-    fare: "Distance based",
+    fare: "₹15",
     recommended: false,
   },
 ];
@@ -161,11 +95,6 @@ function App() {
   const [activeTab, setActiveTab] = useState("home");
   const [activeScreen, setActiveScreen] = useState("home");
  const [selectedBus, setSelectedBus] = useState(null);
- const [routeResults, setRouteResults] = useState([]);
-const [searchLoading, setSearchLoading] = useState(false);
-const [searchError, setSearchError] = useState("");
-  const [searchFrom, setSearchFrom] = useState("");
-  const [searchTo, setSearchTo] = useState("");
 const [busOccupancies, setBusOccupancies] = useState({
   "401K": 32,
   "500D": 68,
@@ -178,78 +107,11 @@ const [busOccupancies, setBusOccupancies] = useState({
   });
 
   const [lastSynced, setLastSynced] = useState(new Date());
-  const [liveEtas, setLiveEtas] = useState({
-    "401K": 4,
-    "500D": 7,
-    "500A": 11,
-  });
-  const [arrivalAlert, setArrivalAlert] = useState(null);
-  const [arrivalAlertHistory, setArrivalAlertHistory] = useState([]);
-  const alertedBusesRef = useRef(new Set());
-  const [savedRoutes, setSavedRoutes] = useState([]);
-
-  const searchRealRoutes = async (from, to) => {
-    setSearchLoading(true);
-    setSearchError("");
-
-    try {
-      const response = await fetch(
-        `${API_URL}/api/search?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
-      );
-
-      if (!response.ok) {
-        throw new Error("Route search failed");
-      }
-
-      const data = await response.json();
-
-      if (!data.success) {
-        throw new Error(data.message || "Unable to find routes");
-      }
-
-      const mappedRoutes = (data.directRoutes || []).map((route, index) => {
-        const routeStops = route.stops || [];
-        const distanceKm = calculateRouteDistanceKm(routeStops);
-
-        return {
-          number: route.routeNumber,
-          destination: to,
-          origin: from,
-          eta: `${4 + index * 3} min`,
-          occupancy: route.occupancy ?? 50,
-          duration: `${24 + index * 2} min`,
-          fare: getFareForDistance(distanceKm),
-          distanceKm: distanceKm.toFixed(1),
-          recommended: false,
-          routeId: route.routeId,
-          routeName: route.routeName,
-          headsign: route.headsign,
-          directionId: route.directionId,
-          fromStop: route.from,
-          toStop: route.to,
-          numberOfStops: route.numberOfStops,
-          routeStops,
-          dataSource: route.dataSource,
-          occupancySource: route.occupancySource,
-        };
-      });
-
-      setRouteResults(mappedRoutes);
-    } catch (error) {
-      console.error("BUSNETT route search failed:", error);
-      setSearchError(
-        "Unable to load BMTC routes. Make sure the cloud API is running."
-      );
-      setRouteResults([]);
-    } finally {
-      setSearchLoading(false);
-    }
-  };
 
   useEffect(() => {
     const syncCloudData = async () => {
       try {
-        const response = await fetch(`${API_URL}/api/buses`);
+        const response = await fetch("http://localhost:5000/api/buses");
 
         if (!response.ok) {
           throw new Error("Cloud API request failed");
@@ -280,42 +142,6 @@ const [busOccupancies, setBusOccupancies] = useState({
     return () => clearInterval(interval);
   }, []);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setLiveEtas((previous) => {
-        const next = { ...previous };
-
-        Object.keys(next).forEach((busNumber) => {
-          if (next[busNumber] > 0) next[busNumber] -= 1;
-        });
-
-        const arrivingBus = buses.find(
-          (bus) => next[bus.number] === 1 && !alertedBusesRef.current.has(bus.number)
-        );
-
-        if (arrivingBus) {
-          alertedBusesRef.current.add(arrivingBus.number);
-          const alert = {
-            id: `${arrivingBus.number}-${Date.now()}`,
-            bus: arrivingBus.number,
-            from: searchFrom,
-            message: `${arrivingBus.number} is about to arrive at ${searchFrom}.`,
-            time: "Just now",
-          };
-          setArrivalAlert(alert);
-          setArrivalAlertHistory((previousHistory) => [
-            alert,
-            ...previousHistory,
-          ].slice(0, 5));
-        }
-
-        return next;
-      });
-    }, 60000);
-
-    return () => clearInterval(interval);
-  }, [searchFrom]);
-
   const goToTab = (tab) => {
     setActiveTab(tab);
     setActiveScreen(tab);
@@ -341,255 +167,47 @@ const updateOccupancy = (busNumber, newOccupancy) => {
 
   const smartRecommendation = getSmartRecommendation(liveBuses);
   const displayBuses = liveBuses.map((bus) => ({
-    ...bus,
-    eta: `${liveEtas[bus.number] ?? parseInt(bus.eta) ?? 0} min`,
-    recommended:
-      smartRecommendation?.bus?.number === bus.number,
-  }));
+  ...bus,
+  recommended:
+    smartRecommendation?.bus?.number === bus.number,
+}));
   return (
     <div className="app">
       <div className="phone-shell">
 
-        <style>{`
-          .page-header,
-          .page-header h2,
-          .page-header h3 {
-            color: #0f172a !important;
-          }
-          .settings-list button {
-            color: #0f172a !important;
-          }
-          .settings-list button svg {
-            color: #28785f;
-            flex-shrink: 0;
-          }
-          .phone-shell {
-            overflow-x: hidden;
-          }
-          .content {
-            padding-bottom: 96px !important;
-          }
-
-          .forecast-section {
-            margin-bottom: 12px !important;
-          }
-
-          .forecast-list {
-            gap: 6px !important;
-          }
-
-          .forecast-item {
-            padding: 8px 0 !important;
-          }
-
-          .track-button {
-            margin-bottom: 8px !important;
-          }
-          .bottom-nav {
-            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-            width: 100% !important;
-            left: 0 !important;
-            right: 0 !important;
-            margin-left: 0 !important;
-            margin-right: 0 !important;
-            box-sizing: border-box !important;
-          }
-          .nav-item {
-            width: 100% !important;
-            min-width: 0 !important;
-            justify-content: center !important;
-          }
-          .bottom-nav + * {
-            margin-right: 0 !important;
-          }
-        `}</style>
-
-        <header
-          className="topbar"
-          style={{
-            alignItems: "center",
-            paddingTop: "12px",
-            paddingBottom: "12px",
-          }}
-        >
-          <div
-            className="brand-header"
-            style={{
-              display: "flex",
-              flexDirection: "row",
-              alignItems: "center",
-              gap: "10px",
-              minWidth: 0,
-            }}
-          >
-            <div
-              style={{
-                width: "52px",
-                height: "52px",
-                overflow: "hidden",
-                flexShrink: 0,
-                position: "relative",
-              }}
-            >
-              <img
-                src={busnettLogo}
-                alt="BusNett logo"
-                className="busnett-logo"
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  width: "72px",
-                  height: "72px",
-                  maxWidth: "none",
-                  objectFit: "contain",
-                  objectPosition: "top left",
-                }}
-              />
+        <header className="topbar">
+            <div>
+              <p className="greeting">Good evening 👋</p>
+              <h1>BUSNETT</h1>
             </div>
 
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                justifyContent: "center",
-              }}
-            >
-              <strong
-                style={{
-                  fontSize: "22px",
-                  lineHeight: 1,
-                  letterSpacing: "-0.6px",
-                  color: "#0f3d78",
-                  fontWeight: "800",
-                }}
-              >
-                <span style={{ color: "#0f3d78" }}>Bus</span>
-                <span style={{ color: "#159b63" }}>Nett</span>
-              </strong>
-
-              <span
-                style={{
-                  marginTop: "5px",
-                  fontSize: "10px",
-                  fontWeight: "700",
-                  color: "#64748b",
-                  letterSpacing: "0.2px",
-                }}
-              >
-                Plan your journey smarter
-              </span>
-            </div>
-          </div>
-
-          <button
-            className="icon-button"
-            onClick={() => setActiveScreen("notifications")}
-            aria-label="Open notifications"
-          >
-            <Bell size={21} />
-            <span className="notification-dot" />
-          </button>
+            <button className="icon-button">
+              <Bell size={21} />
+              <span className="notification-dot" />
+            </button>
         </header>
 
         <main className="content">
 
-          {arrivalAlert && (
-            <div
-              role="alert"
-              style={{
-                position: "sticky",
-                top: "8px",
-                zIndex: 30,
-                display: "flex",
-                alignItems: "center",
-                gap: "11px",
-                background: "#0f172a",
-                color: "#ffffff",
-                borderRadius: "16px",
-                padding: "12px 13px",
-                marginBottom: "12px",
-                boxShadow: "0 10px 24px rgba(15,23,42,0.18)",
-              }}
-            >
-              <div
-                style={{
-                  width: "34px",
-                  height: "34px",
-                  flexShrink: 0,
-                  borderRadius: "11px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  background: "#e8f7f0",
-                  color: "#16865b",
-                }}
-              >
-                <Bell size={17} />
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <strong style={{ display: "block", fontSize: "13px" }}>
-                  Bus arrival alert
-                </strong>
-                <span style={{ display: "block", marginTop: "2px", fontSize: "11px", color: "#cbd5e1" }}>
-                  {arrivalAlert.message}
-                </span>
-              </div>
-              <button
-                onClick={() => setArrivalAlert(null)}
-                style={{
-                  border: "0",
-                  background: "transparent",
-                  color: "#cbd5e1",
-                  fontSize: "11px",
-                  fontWeight: "700",
-                  cursor: "pointer",
-                  padding: "5px",
-                }}
-              >
-                Dismiss
-              </button>
-            </div>
-          )}
-
           {activeScreen === "home" && (
             <HomeScreen
-              lastSynced={lastSynced}
-              buses={displayBuses}
-              from={searchFrom}
-              to={searchTo}
-              setFrom={setSearchFrom}
-              setTo={setSearchTo}
-              onSearch={(from, to) => {
-                setSearchFrom(from);
-                setSearchTo(to);
-                searchRealRoutes(from, to);
-                setActiveScreen("search");
-              }}
-              onNearby={() => setActiveScreen("nearby")}
-              onSaved={() => setActiveScreen("saved")}
-            />
+  lastSynced={lastSynced}
+  buses={displayBuses}
+  onSearch={() => setActiveScreen("search")}
+  onNearby={() => setActiveScreen("nearby")}
+/>
           )}
 
           {activeScreen === "search" && (
-  <SearchScreen
-    buses={routeResults}
-    loading={searchLoading}
-    error={searchError}
-    initialFrom={searchFrom}
-    initialTo={searchTo}
-    onSearch={(from, to) => {
-      setSearchFrom(from);
-      setSearchTo(to);
-      searchRealRoutes(from, to);
-    }}
-    onBack={() => setActiveScreen("home")}
-    onSelectBus={(bus) => {
-      setSelectedBus(bus);
-      setActiveScreen("details");
-    }}
-  />
-)}
+            <SearchScreen
+  buses={displayBuses}
+  onBack={() => setActiveScreen("home")}
+  onSelectBus={(bus) => {
+                setSelectedBus(bus);
+                setActiveScreen("details");
+              }}
+            />
+          )}
 
           {activeScreen === "nearby" && (
             <NearbyBusesScreen
@@ -603,32 +221,6 @@ const updateOccupancy = (busNumber, newOccupancy) => {
                 setSelectedBus(bus);
                 setActiveScreen("tracking");
               }}
-            />
-          )}
-
-          {activeScreen === "notifications" && (
-            <NotificationsScreen
-              buses={displayBuses}
-              arrivalAlert={arrivalAlert}
-              arrivalAlertHistory={arrivalAlertHistory}
-              onDismissAlert={() => setArrivalAlert(null)}
-              onBack={() => setActiveScreen("home")}
-            />
-          )}
-
-          {activeScreen === "saved" && (
-            <SavedRoutesScreen
-              savedRoutes={savedRoutes}
-              onBack={() => setActiveScreen("home")}
-              onRemove={(route) =>
-                setSavedRoutes((prev) =>
-                  prev.filter(
-                    (item) =>
-                      item.from !== route.from || item.to !== route.to
-                  )
-                )
-              }
-              onSelect={() => setActiveScreen("search")}
             />
           )}
 
@@ -647,8 +239,15 @@ const updateOccupancy = (busNumber, newOccupancy) => {
             />
           )}
 
+          {activeScreen === "trips" && <TripsScreen />}
+          {activeScreen === "pass" && <PassScreen />}
+
           {activeScreen === "profile" && (
-            <ProfileScreen />
+            <ProfileScreen onAuth={() => setActiveScreen("auth")} />
+          )}
+
+          {activeScreen === "auth" && (
+            <AuthScreen onBack={() => setActiveScreen("profile")} />
           )}
 
         </main>
@@ -660,6 +259,20 @@ const updateOccupancy = (busNumber, newOccupancy) => {
               label="Home"
               active={activeTab === "home"}
               onClick={() => goToTab("home")}
+            />
+
+            <NavItem
+              icon={<BusFront size={21} />}
+              label="Trips"
+              active={activeTab === "trips"}
+              onClick={() => goToTab("trips")}
+            />
+
+            <NavItem
+              icon={<Ticket size={21} />}
+              label="Pass"
+              active={activeTab === "pass"}
+              onClick={() => goToTab("pass")}
             />
 
             <NavItem
@@ -681,118 +294,8 @@ const updateOccupancy = (busNumber, newOccupancy) => {
    HOME
 ========================= */
 
-
-function StopAutocompleteInput({ value, onChange, placeholder, ariaLabel }) {
-  const [suggestions, setSuggestions] = useState([]);
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    const query = value.trim();
-    if (query.length < 2) {
-      setSuggestions([]);
-      return;
-    }
-
-    const timer = setTimeout(async () => {
-      try {
-        const response = await fetch(
-          `${API_URL}/api/stops?q=${encodeURIComponent(query)}`
-        );
-        if (!response.ok) return;
-        const data = await response.json();
-        setSuggestions((data.stops || []).slice(0, 6));
-      } catch (error) {
-        console.error("BUSNETT stop suggestions failed:", error);
-        setSuggestions([]);
-      }
-    }, 220);
-
-    return () => clearTimeout(timer);
-  }, [value]);
-
-  const selectStop = (stop) => {
-    onChange(stop.name);
-    setOpen(false);
-    setSuggestions([]);
-  };
-
-  return (
-    <div style={{ position: "relative", width: "100%" }}>
-      <input
-        value={value}
-        onChange={(e) => {
-          onChange(e.target.value);
-          setOpen(true);
-        }}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 180)}
-        placeholder={placeholder}
-        aria-label={ariaLabel}
-        autoComplete="off"
-        style={{
-          display: "block",
-          width: "100%",
-          border: "none",
-          outline: "none",
-          background: "transparent",
-          padding: "4px 0 0",
-          fontSize: "16px",
-          fontWeight: "700",
-          color: "inherit",
-        }}
-      />
-
-      {open && suggestions.length > 0 && (
-        <div
-          style={{
-            position: "absolute",
-            zIndex: 1000,
-            top: "calc(100% + 8px)",
-            left: 0,
-            right: 0,
-            background: "#ffffff",
-            border: "1px solid #dbe3ea",
-            borderRadius: "14px",
-            boxShadow: "0 12px 28px rgba(15,23,42,0.12)",
-            overflow: "hidden",
-          }}
-        >
-          {suggestions.map((stop) => (
-            <button
-              key={stop.id}
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => selectStop(stop)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "10px",
-                width: "100%",
-                padding: "11px 12px",
-                border: "none",
-                borderBottom: "1px solid #eef2f6",
-                background: "#ffffff",
-                textAlign: "left",
-                cursor: "pointer",
-                color: "#0f172a",
-                fontSize: "13px",
-                fontWeight: "650",
-              }}
-            >
-              <MapPin size={15} color="#16865b" />
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {stop.name}
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function HomeScreen({ buses, onSearch, lastSynced, onNearby, onSaved, from, to, setFrom, setTo }) {
-  const recommendation = getSmartRecommendation(buses);
+function HomeScreen({ buses, onSearch, lastSynced, onNearby }) {
+    const recommendation = getSmartRecommendation(buses);
   return (
     <>
       <div
@@ -831,6 +334,24 @@ function HomeScreen({ buses, onSearch, lastSynced, onNearby, onSaved, from, to, 
         </span>
       </div>
 
+      <section className="location-card">
+
+        <div className="location-row">
+
+          <MapPin size={18} />
+
+          <div>
+            <span>Current location</span>
+            <strong>Kengeri</strong>
+          </div>
+
+          <ChevronRight size={18} />
+
+        </div>
+
+      </section>
+
+
       <section className="search-card">
 
         <div className="search-title">
@@ -846,16 +367,14 @@ function HomeScreen({ buses, onSearch, lastSynced, onNearby, onSaved, from, to, 
 
 
         <div className="route-input">
+
           <div className="route-dot start" />
-          <div style={{ flex: 1 }}>
+
+          <div>
             <small>FROM</small>
-            <StopAutocompleteInput
-              value={from}
-              onChange={setFrom}
-              placeholder="Enter starting point"
-              ariaLabel="Starting point"
-            />
+            <p>Kengeri</p>
           </div>
+
         </div>
 
 
@@ -863,24 +382,20 @@ function HomeScreen({ buses, onSearch, lastSynced, onNearby, onSaved, from, to, 
 
 
         <div className="route-input">
+
           <div className="route-dot end" />
-          <div style={{ flex: 1 }}>
+
+          <div>
             <small>TO</small>
-            <StopAutocompleteInput
-              value={to}
-              onChange={setTo}
-              placeholder="Enter destination"
-              ariaLabel="Destination"
-            />
+            <p>Majestic</p>
           </div>
+
         </div>
 
 
         <button
           className="search-button"
-          onClick={() => {
-            if (from.trim() && to.trim()) onSearch(from.trim(), to.trim());
-          }}
+          onClick={onSearch}
         >
           <Search size={18} />
           Search buses
@@ -889,7 +404,7 @@ function HomeScreen({ buses, onSearch, lastSynced, onNearby, onSaved, from, to, 
       </section>
 
 
-      <section className="quick-actions" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
+      <section className="quick-actions">
 
         <button onClick={onNearby}>
           <div className="quick-icon">
@@ -898,7 +413,14 @@ function HomeScreen({ buses, onSearch, lastSynced, onNearby, onSaved, from, to, 
           <span>Nearby buses</span>
         </button>
 
-        <button onClick={onSaved}>
+        <button>
+          <div className="quick-icon">
+            <Ticket size={19} />
+          </div>
+          <span>My pass</span>
+        </button>
+
+        <button>
           <div className="quick-icon">
             <Star size={19} />
           </div>
@@ -941,167 +463,30 @@ function HomeScreen({ buses, onSearch, lastSynced, onNearby, onSaved, from, to, 
       </section>
 
 
-      <section
-        className="insight-card"
-        style={{
-          display: "block",
-          cursor: "default",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            gap: "12px",
-          }}
-        >
-          <div className="insight-icon">
-            <Users size={20} />
-          </div>
+      <section className="insight-card">
 
-          <div className="insight-content" style={{ flex: 1 }}>
-            <span>BUSNETT INTELLIGENCE</span>
-
-            <h3 style={{ marginBottom: "5px" }}>
-              {recommendation?.bus?.number || "Best available bus"} — Best overall choice
-            </h3>
-
-            <p>
-              {recommendation?.reason || "Best available option right now"}.
-            </p>
-          </div>
+        <div className="insight-icon">
+          <Users size={20} />
         </div>
 
-        {recommendation?.bus && (
-          <>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
-                gap: "8px",
-                marginTop: "14px",
-              }}
-            >
-              <div
-                style={{
-                  background: "rgba(255,255,255,0.7)",
-                  borderRadius: "12px",
-                  padding: "9px",
-                }}
-              >
-                <Clock3 size={15} />
-                <strong
-                  style={{
-                    display: "block",
-                    marginTop: "4px",
-                    fontSize: "13px",
-                    color: "#0f172a",
-                  }}
-                >
-                  {recommendation.bus.eta}
-                </strong>
-                <span
-                  style={{
-                    fontSize: "9px",
-                    color: "#64748b",
-                  }}
-                >
-                  arrival
-                </span>
-              </div>
+        <div className="insight-content">
 
-              <div
-                style={{
-                  background: "rgba(255,255,255,0.7)",
-                  borderRadius: "12px",
-                  padding: "9px",
-                }}
-              >
-                <Users size={15} />
-                <strong
-                  style={{
-                    display: "block",
-                    marginTop: "4px",
-                    fontSize: "13px",
-                    color: "#0f172a",
-                  }}
-                >
-                  {recommendation.bus.occupancy}%
-                </strong>
-                <span
-                  style={{
-                    fontSize: "9px",
-                    color: "#64748b",
-                  }}
-                >
-                  occupancy
-                </span>
-              </div>
+          <span>SMART INSIGHT</span>
 
-              <div
-                style={{
-                  background: "rgba(255,255,255,0.7)",
-                  borderRadius: "12px",
-                  padding: "9px",
-                }}
-              >
-                <Navigation size={15} />
-                <strong
-                  style={{
-                    display: "block",
-                    marginTop: "4px",
-                    fontSize: "13px",
-                    color: "#0f172a",
-                  }}
-                >
-                  {recommendation.bus.duration}
-                </strong>
-                <span
-                  style={{
-                    fontSize: "9px",
-                    color: "#64748b",
-                  }}
-                >
-                  journey
-                </span>
-              </div>
-            </div>
+          <h3>
+  Take {recommendation?.bus?.number || "the best available bus"}
+</h3>
 
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginTop: "12px",
-                paddingTop: "10px",
-                borderTop: "1px solid rgba(15,23,42,0.08)",
-              }}
-            >
-              <span
-                style={{
-                  fontSize: "10px",
-                  fontWeight: "700",
-                  color: "#64748b",
-                }}
-              >
-                Based on ETA + occupancy + journey time
-              </span>
+<p>
+  {recommendation?.bus?.eta || "--"} away ·{" "}
+  {recommendation?.bus?.occupancy ?? "--"}% occupied.{" "}
+  {recommendation?.reason || "Best available option right now"}.
+</p>
 
-              <span
-                style={{
-                  fontSize: "10px",
-                  fontWeight: "800",
-                  color: "#16865b",
-                  background: "#e8f7f0",
-                  padding: "5px 8px",
-                  borderRadius: "8px",
-                }}
-              >
-                87% confidence
-              </span>
-            </div>
-          </>
-        )}
+        </div>
+
+        <ChevronRight size={18} />
+
       </section>
     </>
   );
@@ -1185,7 +570,7 @@ function NearbyBusesScreen({ buses, onBack, onSelectBus, onTrackBus }) {
             color: "#64748b",
           }}
         >
-          Buses approaching nearby stops, powered by BUSNETT's
+          Buses approaching your nearby stop, powered by BUSNETT's
           cloud-synced transit data.
         </p>
       </section>
@@ -1261,7 +646,7 @@ function NearbyBusesScreen({ buses, onBack, onSelectBus, onTrackBus }) {
                     color: "#64748b",
                   }}
                 >
-                  {bus.origin || "Your stop"} → {bus.destination}
+                  Kengeri → {bus.destination}
                 </span>
               </div>
 
@@ -1398,709 +783,125 @@ function NearbyBusesScreen({ buses, onBack, onSelectBus, onTrackBus }) {
 
 
 /* =========================
-   SAVED ROUTES
-========================= */
-
-function SavedRoutesScreen({ savedRoutes, onBack, onRemove, onSelect }) {
-  return (
-    <>
-      <div className="search-page-header">
-        <button className="back-button" onClick={onBack}>
-          <ArrowLeft size={20} />
-        </button>
-
-        <div>
-          <span className="eyebrow">YOUR ROUTES</span>
-          <h2>Saved routes</h2>
-        </div>
-      </div>
-
-      <section
-        style={{
-          background: "#e8f7f0",
-          borderRadius: "20px",
-          padding: "16px",
-          marginBottom: "16px",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <div className="quick-icon">
-            <Star size={18} fill="currentColor" />
-          </div>
-
-          <div>
-            <span
-              style={{
-                display: "block",
-                fontSize: "10px",
-                fontWeight: "800",
-                color: "#16865b",
-                letterSpacing: "0.8px",
-              }}
-            >
-              QUICK ACCESS
-            </span>
-
-            <strong
-              style={{
-                display: "block",
-                marginTop: "3px",
-                fontSize: "15px",
-                color: "#0f172a",
-              }}
-            >
-              Your regular journeys
-            </strong>
-          </div>
-        </div>
-
-        <p
-          style={{
-            margin: "10px 0 0",
-            fontSize: "12px",
-            lineHeight: 1.5,
-            color: "#64748b",
-          }}
-        >
-          Save frequently used routes to find your next bus faster.
-        </p>
-      </section>
-
-      <div className="section-heading">
-        <div>
-          <span className="eyebrow">SAVED</span>
-          <h3>Routes</h3>
-        </div>
-
-        <span className="result-count">
-          {savedRoutes.length} saved
-        </span>
-      </div>
-
-      {savedRoutes.length === 0 ? (
-        <section
-          style={{
-            textAlign: "center",
-            background: "#ffffff",
-            border: "1px solid #e2e8f0",
-            borderRadius: "20px",
-            padding: "30px 18px",
-          }}
-        >
-          <Star size={28} />
-          <h3 style={{ margin: "12px 0 6px", color: "#0f172a" }}>
-            No saved routes yet
-          </h3>
-
-          <p
-            style={{
-              margin: 0,
-              fontSize: "12px",
-              lineHeight: 1.5,
-              color: "#64748b",
-            }}
-          >
-            Save your regular journeys here for quicker access.
-          </p>
-        </section>
-      ) : (
-        <div>
-          {savedRoutes.map((route, index) => (
-            <article
-              key={`${route.from}-${route.to}-${index}`}
-              style={{
-                background: "#ffffff",
-                border: "1px solid #e2e8f0",
-                borderRadius: "18px",
-                padding: "15px",
-                marginBottom: "10px",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "11px",
-                }}
-              >
-                <div className="quick-icon">
-                  <Star size={18} fill="currentColor" />
-                </div>
-
-                <div style={{ flex: 1 }}>
-                  <span
-                    style={{
-                      display: "block",
-                      fontSize: "10px",
-                      fontWeight: "800",
-                      color: "#94a3b8",
-                      letterSpacing: "0.7px",
-                    }}
-                  >
-                    SAVED ROUTE
-                  </span>
-
-                  <strong
-                    style={{
-                      display: "block",
-                      marginTop: "4px",
-                      fontSize: "14px",
-                      color: "#0f172a",
-                    }}
-                  >
-                    {route.from} → {route.to}
-                  </strong>
-                </div>
-
-                <button
-                  onClick={() => onRemove(route)}
-                  aria-label={`Remove ${route.from} to ${route.to}`}
-                  style={{
-                    border: "none",
-                    background: "transparent",
-                    color: "#94a3b8",
-                    fontSize: "20px",
-                    cursor: "pointer",
-                    padding: "5px",
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-
-              <button
-                onClick={onSelect}
-                style={{
-                  width: "100%",
-                  marginTop: "13px",
-                  border: "none",
-                  background: "#0f172a",
-                  color: "#ffffff",
-                  borderRadius: "10px",
-                  padding: "10px",
-                  fontSize: "11px",
-                  fontWeight: "800",
-                  cursor: "pointer",
-                }}
-              >
-                Find buses for this route
-              </button>
-            </article>
-          ))}
-        </div>
-      )}
-
-      <section
-        style={{
-          background: "#f8fafc",
-          border: "1px solid #e2e8f0",
-          borderRadius: "18px",
-          padding: "14px",
-          marginTop: "6px",
-        }}
-      >
-        <strong
-          style={{
-            display: "block",
-            fontSize: "12px",
-            color: "#0f172a",
-            marginBottom: "4px",
-          }}
-        >
-          BUSNETT shortcut
-        </strong>
-
-        <p
-          style={{
-            margin: 0,
-            fontSize: "11px",
-            lineHeight: 1.5,
-            color: "#64748b",
-          }}
-        >
-          Your saved routes can be used as shortcuts to live bus
-          availability, ETA and occupancy information.
-        </p>
-      </section>
-    </>
-  );
-}
-
-
-/* =========================
-   NOTIFICATIONS
-========================= */
-
-function NotificationsScreen({ buses, arrivalAlert, arrivalAlertHistory, onDismissAlert, onBack }) {
-  const recommendation = getSmartRecommendation(buses);
-  const bestBus = recommendation?.bus;
-
-  const notifications = [
-    ...(arrivalAlertHistory || []).map((alert) => ({
-      icon: <Bell size={19} />,
-      title: `${alert.bus} is about to arrive`,
-      message: `Your bus is approaching ${alert.from}, your selected FROM stop.`,
-      time: alert.time,
-      unread: arrivalAlert?.id === alert.id,
-    })),
-    {
-      icon: <Clock3 size={19} />,
-      title: `${bestBus?.number || "Your bus"} is approaching`,
-      message: bestBus
-        ? `${bestBus.eta || "--"} away from ${
-            bestBus.origin || "your selected stop"
-          } with an estimated ${
-            bestBus.occupancy ?? "--"
-          }% occupancy.`
-        : "Live bus information is currently unavailable.",
-      time: "Live",
-      unread: !arrivalAlertHistory?.length,
-    },
-    {
-      icon: <Users size={19} />,
-      title: "Crowding update",
-      message: `BUSNETT estimates ${buses[1]?.number || "500D"} at ${buses[1]?.occupancy ?? "--"}% occupancy.`,
-      time: "2 min ago",
-      unread: true,
-    },
-    {
-      icon: <Star size={19} />,
-      title: "Smart recommendation",
-      message: bestBus
-        ? `${bestBus.number} is currently the best balance of arrival time and crowding.`
-        : "No recommendation is available right now.",
-      time: "5 min ago",
-      unread: false,
-    },
-    {
-      icon: <Activity size={19} />,
-      title: "Cloud data synced",
-      message: "Latest transit intelligence has been received from the BUSNETT cloud layer.",
-      time: "7 min ago",
-      unread: false,
-    },
-  ];
-
-  return (
-    <>
-      <div className="search-page-header">
-        <button className="back-button" onClick={onBack}>
-          <ArrowLeft size={20} />
-        </button>
-
-        <div>
-          <span className="eyebrow">UPDATES</span>
-          <h2>Notifications</h2>
-        </div>
-      </div>
-
-      {arrivalAlert && (
-        <section
-          style={{
-            background: "#e8f7f0",
-            border: "1px solid #b7ead1",
-            borderRadius: "18px",
-            padding: "14px",
-            marginBottom: "12px",
-          }}
-        >
-          <strong style={{ display: "block", fontSize: "13px", color: "#0f172a" }}>
-            Arrival alert active
-          </strong>
-          <p style={{ margin: "5px 0 10px", fontSize: "11px", color: "#475569", lineHeight: 1.5 }}>
-            {arrivalAlert.bus} is about to arrive at {arrivalAlert.from}.
-          </p>
-          <button
-            onClick={onDismissAlert}
-            style={{
-              border: "0",
-              borderRadius: "10px",
-              padding: "8px 11px",
-              background: "#16865b",
-              color: "#ffffff",
-              fontSize: "11px",
-              fontWeight: "700",
-              cursor: "pointer",
-            }}
-          >
-            Dismiss alert
-          </button>
-        </section>
-      )}
-
-      <section
-        style={{
-          background: "#e8f7f0",
-          borderRadius: "20px",
-          padding: "15px",
-          marginBottom: "16px",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <div className="quick-icon">
-            <Bell size={18} />
-          </div>
-
-          <div>
-            <span
-              style={{
-                display: "block",
-                fontSize: "10px",
-                fontWeight: "800",
-                color: "#16865b",
-                letterSpacing: "0.8px",
-              }}
-            >
-              SMART ALERTS
-            </span>
-
-            <strong
-              style={{
-                display: "block",
-                marginTop: "3px",
-                fontSize: "15px",
-                color: "#0f172a",
-              }}
-            >
-              Stay ahead of your journey
-            </strong>
-          </div>
-        </div>
-
-        <p
-          style={{
-            margin: "10px 0 0",
-            fontSize: "12px",
-            lineHeight: 1.5,
-            color: "#64748b",
-          }}
-        >
-          BUSNETT turns live transit data into useful passenger alerts.
-        </p>
-      </section>
-
-      <div className="section-heading">
-        <div>
-          <span className="eyebrow">RECENT</span>
-          <h3>Your updates</h3>
-        </div>
-
-        <span className="result-count">
-          {notifications.filter((item) => item.unread).length} new
-        </span>
-      </div>
-
-      <div>
-        {notifications.map((notification, index) => (
-          <article
-            key={index}
-            style={{
-              display: "flex",
-              gap: "12px",
-              alignItems: "flex-start",
-              background: "#ffffff",
-              border: "1px solid #e2e8f0",
-              borderRadius: "18px",
-              padding: "14px",
-              marginBottom: "10px",
-            }}
-          >
-            <div
-              style={{
-                width: "38px",
-                height: "38px",
-                flexShrink: 0,
-                borderRadius: "12px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                background: notification.unread ? "#e8f7f0" : "#f1f5f9",
-                color: notification.unread ? "#16865b" : "#64748b",
-              }}
-            >
-              {notification.icon}
-            </div>
-
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
-                <strong style={{ fontSize: "13px", color: "#0f172a" }}>
-                  {notification.title}
-                </strong>
-
-                {notification.unread && (
-                  <span
-                    style={{
-                      width: "7px",
-                      height: "7px",
-                      flexShrink: 0,
-                      borderRadius: "50%",
-                      background: "#16865b",
-                      marginTop: "5px",
-                    }}
-                  />
-                )}
-              </div>
-
-              <p
-                style={{
-                  margin: "5px 0 7px",
-                  fontSize: "11px",
-                  lineHeight: 1.5,
-                  color: "#64748b",
-                }}
-              >
-                {notification.message}
-              </p>
-
-              <span style={{ fontSize: "10px", color: "#94a3b8" }}>
-                {notification.time}
-              </span>
-            </div>
-          </article>
-        ))}
-      </div>
-
-      <section
-        style={{
-          background: "#f8fafc",
-          border: "1px solid #e2e8f0",
-          borderRadius: "18px",
-          padding: "14px",
-          marginTop: "6px",
-        }}
-      >
-        <strong
-          style={{
-            display: "block",
-            fontSize: "12px",
-            color: "#0f172a",
-            marginBottom: "4px",
-          }}
-        >
-          Why these alerts?
-        </strong>
-
-        <p
-          style={{
-            margin: 0,
-            fontSize: "11px",
-            lineHeight: 1.5,
-            color: "#64748b",
-          }}
-        >
-          Alerts are generated from cloud-synced occupancy, ETA and route
-          intelligence. Passenger identity is not required.
-        </p>
-      </section>
-    </>
-  );
-}
-
-
-/* =========================
    SEARCH SCREEN
 ========================= */
 
-function SearchScreen({
-  buses,
-  loading,
-  error,
-  initialFrom,
-  initialTo,
-  onSearch,
-  onBack,
-  onSelectBus,
-}) {
-  const [from, setFrom] = useState(initialFrom || "");
-  const [to, setTo] = useState(initialTo || "");
-  const recommendation = getSmartRecommendation(buses);
-
-  const handleSearch = () => {
-    if (!from.trim() || !to.trim()) return;
-    onSearch(from.trim(), to.trim());
-  };
-
-  const swapLocations = () => {
-    setFrom(to);
-    setTo(from);
-  };
-
+function SearchScreen({ buses, onBack, onSelectBus }) {
+    const recommendation = getSmartRecommendation(buses);
   return (
     <>
       <div className="search-page-header">
-        <button className="back-button" onClick={onBack}>
+
+        <button
+          className="back-button"
+          onClick={onBack}
+        >
           <ArrowLeft size={20} />
         </button>
 
         <div>
-          <span
-            className="eyebrow"
-            style={{ color: "#16865b" }}
-          >
+          <span className="eyebrow">
             YOUR ROUTE
           </span>
-          <h2 style={{ color: "#0f172a" }}>Find a bus</h2>
+
+          <h2>Available buses</h2>
         </div>
+
       </div>
 
-      <div
-        className="selected-route"
-        style={{
-          position: "relative",
-          display: "flex",
-          flexDirection: "column",
-          gap: "12px",
-        }}
-      >
+
+      <div className="selected-route">
+
         <div className="selected-stop">
+
           <div className="route-dot start" />
 
-          <div style={{ flex: 1 }}>
+          <div>
             <small>FROM</small>
-            <StopAutocompleteInput
-              value={from}
-              onChange={setFrom}
-              placeholder="Enter starting point"
-              ariaLabel="Starting point"
-            />
+            <strong>Kengeri</strong>
           </div>
+
         </div>
 
-        <button
-          type="button"
-          onClick={swapLocations}
-          aria-label="Swap starting point and destination"
-          title="Swap stops"
-          style={{
-            position: "absolute",
-            right: "12px",
-            top: "50%",
-            transform: "translateY(-50%)",
-            width: "40px",
-            height: "40px",
-            borderRadius: "12px",
-            border: "1px solid #dbe3ea",
-            background: "#ffffff",
-            color: "#16865b",
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 5,
-            boxShadow: "0 2px 8px rgba(15,23,42,0.06)",
-          }}
-        >
-          <ArrowUpDown size={20} strokeWidth={2.5} />
-        </button>
 
         <div className="route-connector" />
 
+
         <div className="selected-stop">
+
           <div className="route-dot end" />
 
-          <div style={{ flex: 1 }}>
+          <div>
             <small>TO</small>
-            <StopAutocompleteInput
-              value={to}
-              onChange={setTo}
-              placeholder="Enter destination"
-              ariaLabel="Destination"
-            />
+            <strong>Majestic</strong>
           </div>
+
         </div>
 
-        <button
-          className="search-button"
-          onClick={handleSearch}
-          disabled={loading}
-          style={{ marginTop: "4px" }}
-        >
-          <Search size={18} />
-          {loading ? "Searching..." : "Search buses"}
-        </button>
       </div>
 
+
       <div className="results-header">
+
         <div>
-          <span className="eyebrow">SMART MATCH</span>
+          <span className="eyebrow">
+            SMART MATCH
+          </span>
+
           <h3>Best options</h3>
         </div>
 
         <span className="result-count">
-          {loading ? "Searching..." : `${buses.length} buses`}
+          3 buses
         </span>
+
       </div>
 
-      {error && (
-        <div
-          style={{
-            background: "#fff7ed",
-            border: "1px solid #fed7aa",
-            color: "#9a3412",
-            borderRadius: "14px",
-            padding: "12px",
-            marginBottom: "12px",
-            fontSize: "11px",
-            lineHeight: 1.5,
-          }}
-        >
-          {error}
+
+      <div className="bus-list">
+
+        {buses.map((bus) => (
+          <BusCard
+            key={bus.number}
+            bus={bus}
+            onClick={() => onSelectBus(bus)}
+          />
+        ))}
+
+      </div>
+
+
+      <div className="recommendation-banner">
+
+        <div className="insight-icon">
+          <Star
+            size={19}
+            fill="currentColor"
+          />
         </div>
-      )}
 
-      {loading && (
-        <div
-          style={{
-            background: "#f8fafc",
-            border: "1px solid #e2e8f0",
-            borderRadius: "14px",
-            padding: "14px",
-            marginBottom: "12px",
-            fontSize: "11px",
-            color: "#64748b",
-            textAlign: "center",
-          }}
-        >
-          Finding real BMTC routes...
+        <div>
+
+          <span>BUSNETT RECOMMENDS</span>
+
+         <strong>
+  {recommendation?.bus?.number || "Best bus"} is the best balance
+</strong>
+
+<p>
+  {recommendation?.bus?.eta || "--"} away ·{" "}
+  {recommendation?.bus?.occupancy ?? "--"}% occupied.{" "}
+  {recommendation?.reason || "Best available option right now"}.
+</p>
+
         </div>
-      )}
 
-      {!loading && (
-        <div className="bus-list">
-          {buses.map((bus) => (
-            <BusCard
-              key={`${bus.routeId || bus.number}-${bus.directionId || ""}`}
-              bus={bus}
-              onClick={() => onSelectBus(bus)}
-            />
-          ))}
-        </div>
-      )}
+      </div>
 
-      {!loading && recommendation && (
-        <div className="recommendation-banner">
-          <div className="insight-icon">
-            <Star size={19} fill="currentColor" />
-          </div>
-
-          <div>
-            <span>BUSNETT RECOMMENDS</span>
-
-            <strong>
-              {recommendation.bus.number} is the best balance
-            </strong>
-
-            <p>
-              {recommendation.bus.eta} away ·{" "}
-              {recommendation.bus.occupancy}% occupied.{" "}
-              {recommendation.reason}.
-            </p>
-          </div>
-        </div>
-      )}
     </>
   );
 }
+
 
 /* =========================
    BUS DETAILS
@@ -2110,7 +911,7 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
 
   const forecast = [
     {
-      stop: bus.origin || "Your stop",
+      stop: "Kengeri",
       occupancy: bus.occupancy,
     },
     {
@@ -2122,7 +923,7 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
       occupancy: Math.min(bus.occupancy + 17, 100),
     },
     {
-      stop: bus.destination || "Destination",
+      stop: "Majestic",
       occupancy: Math.min(bus.occupancy + 24, 100),
     },
   ];
@@ -2170,23 +971,10 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
       </div>
 
 
-      <section
-        className="bus-hero"
-        style={{
-          padding: "13px 15px",
-          marginBottom: "12px",
-        }}
-      >
+      <section className="bus-hero">
 
-        <div
-          className="hero-bus-icon"
-          style={{
-            width: "48px",
-            height: "48px",
-            flexShrink: 0,
-          }}
-        >
-          <BusFront size={25} />
+        <div className="hero-bus-icon">
+          <BusFront size={30} />
         </div>
 
         <div className="hero-bus-info">
@@ -2204,21 +992,13 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
       </section>
 
 
-      <section
-        className="occupancy-card"
-        style={{
-          padding: "13px 15px",
-          marginBottom: "12px",
-        }}
-      >
+      <section className="occupancy-card">
 
         <div className="occupancy-heading">
 
           <div>
             <span>ESTIMATED OCCUPANCY</span>
-            <h3 style={{ fontSize: "28px", margin: "3px 0 0" }}>
-              {bus.occupancy}%
-            </h3>
+            <h3>{bus.occupancy}%</h3>
           </div>
 
           <Users size={24} />
@@ -2245,19 +1025,9 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
       </section>
 
 
-      <section
-        className="forecast-section"
-        style={{
-          marginBottom: "12px",
-        }}
-      >
+      <section className="forecast-section">
 
-        <div
-          className="section-heading"
-          style={{
-            marginBottom: "8px",
-          }}
-        >
+        <div className="section-heading">
 
           <div>
             <span className="eyebrow">
@@ -2321,9 +1091,9 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
         style={{
           background: "#f8fafc",
           border: "1px solid #e2e8f0",
-          borderRadius: "16px",
-          padding: "12px 14px",
-          marginBottom: "12px",
+          borderRadius: "18px",
+          padding: "15px",
+          marginBottom: "16px",
         }}
       >
         <div
@@ -2359,25 +1129,9 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
       </section>
 
 
-      <section
-        className="take-bus-card"
-        style={{
-          padding: "13px 15px",
-          marginBottom: "12px",
-          display: "flex",
-          alignItems: "center",
-          gap: "12px",
-        }}
-      >
+      <section className="take-bus-card">
 
-        <div
-          className="take-icon"
-          style={{
-            width: "50px",
-            height: "50px",
-            flexShrink: 0,
-          }}
-        >
+        <div className="take-icon">
 
           <Star
             size={21}
@@ -2390,11 +1144,11 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
 
           <span>SMART DECISION</span>
 
-          <h3 style={{ margin: "3px 0 4px", fontSize: "17px" }}>
+          <h3>
             Should I take this bus?
           </h3>
 
-          <p style={{ margin: 0, fontSize: "12px", lineHeight: 1.4 }}>
+          <p>
             {bus.occupancy < 50
               ? "Yes — this bus has plenty of available space."
               : bus.occupancy < 70
@@ -2410,23 +1164,6 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
       <button
         className="track-button"
         onClick={onTrack}
-        style={{
-          width: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: "8px",
-          marginTop: "4px",
-          marginBottom: "4px",
-          border: "none",
-          borderRadius: "12px",
-          padding: "12px 16px",
-          background: "#16865b",
-          color: "#ffffff",
-          fontSize: "13px",
-          fontWeight: "800",
-          cursor: "pointer",
-        }}
       >
         <Navigation size={18} />
         Track this bus live
@@ -2441,88 +1178,33 @@ function BusDetailsScreen({ bus, onBack, onTrack }) {
    LIVE TRACKING
 ========================= */
 
-
-const busMapIcon = L.divIcon({
-  className: "bus-map-marker-visible",
-  html: `
-    <div style="
-      width: 42px;
-      height: 42px;
-      border-radius: 50%;
-      background: #16865b;
-      border: 3px solid #ffffff;
-      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.28);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    ">
-      <svg width="23" height="23" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <path d="M6 17V5.8C6 4.25 7.25 3 8.8 3H15.2C16.75 3 18 4.25 18 5.8V17" stroke="white" stroke-width="1.8" stroke-linecap="round"/>
-        <path d="M5 17H19L17.8 20H6.2L5 17Z" stroke="white" stroke-width="1.8" stroke-linejoin="round"/>
-        <path d="M8 7H16V11H8V7Z" stroke="white" stroke-width="1.8" stroke-linejoin="round"/>
-        <circle cx="8" cy="17" r="1.3" fill="white"/>
-        <circle cx="16" cy="17" r="1.3" fill="white"/>
-      </svg>
-    </div>
-  `,
-  iconSize: [42, 42],
-  iconAnchor: [21, 21],
-  popupAnchor: [0, -22],
-});
-
 function TrackingScreen({ bus, onBack }) {
-  const [routeResults, setRouteResults] = useState([]);
-const [searchLoading, setSearchLsoading] = useState(false);
-const [searchError, setSearchError] = useState("");
   const [liveEta, setLiveEta] = useState(parseInt(bus.eta) || 4);
   const [busProgress, setBusProgress] = useState(45);
-  const routePoints = Array.isArray(bus.routeStops)
-  ? bus.routeStops
-      .map((stop) => {
-        const lat = Number(stop.lat ?? stop.latitude);
-        const lng = Number(
-          stop.lon ?? stop.lng ?? stop.longitude
-        );
-
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-          return null;
-        }
-
-        return [lat, lng];
-      })
-      .filter(Boolean)
-  : [];
-
-const safeRoutePoints =
-  routePoints.length >= 2
-    ? routePoints
-    : [
-        [12.9716, 77.5946],
-        [12.9716, 77.5946],
-      ];
+  const routePoints = [
+  [12.9345, 77.4847], // Kengeri
+  [12.9365, 77.5000],
+  [12.9500, 77.5350], // RR Nagar
+  [12.9610, 77.5650], // Vijayanagar
+  [12.9716, 77.5946], // Majestic
+];
 
 const routeIndex = Math.min(
-  Math.floor(
-    (busProgress / 100) * (safeRoutePoints.length - 1)
-  ),
-  safeRoutePoints.length - 2
+  Math.floor((busProgress / 100) * (routePoints.length - 1)),
+  routePoints.length - 2
 );
 
 const segmentProgress =
-  (busProgress / 100) *
-    (safeRoutePoints.length - 1) -
-  routeIndex;
+  (busProgress / 100) * (routePoints.length - 1) - routeIndex;
 
 const currentLat =
-  safeRoutePoints[routeIndex][0] +
-  (safeRoutePoints[routeIndex + 1][0] -
-    safeRoutePoints[routeIndex][0]) *
+  routePoints[routeIndex][0] +
+  (routePoints[routeIndex + 1][0] - routePoints[routeIndex][0]) *
     segmentProgress;
 
 const currentLng =
-  safeRoutePoints[routeIndex][1] +
-  (safeRoutePoints[routeIndex + 1][1] -
-    safeRoutePoints[routeIndex][1]) *
+  routePoints[routeIndex][1] +
+  (routePoints[routeIndex + 1][1] - routePoints[routeIndex][1]) *
     segmentProgress;
     useEffect(() => {
     const interval = setInterval(() => {
@@ -2532,22 +1214,24 @@ const currentLng =
 
     return () => clearInterval(interval);
   }, []);
-  const stops = Array.isArray(bus.routeStops)
-    ? bus.routeStops.slice(0, 8).map((stop, index, list) => ({
-        name:
-          stop.name ||
-          stop.stopName ||
-          `Stop ${index + 1}`,
-        status:
-          index === 0
-            ? "Starting stop"
-            : index === list.length - 1
-            ? "Destination"
-            : index === 1
-            ? "Current route"
-            : "Upcoming",
-      }))
-    : [];
+  const stops = [
+    {
+      name: "Kengeri",
+      status: "Passed",
+    },
+    {
+      name: "RR Nagar",
+      status: "Current location",
+    },
+    {
+      name: "Vijayanagar",
+      status: "Upcoming",
+    },
+    {
+      name: "Majestic",
+      status: "Destination",
+    },
+  ];
 
   return (
     <>
@@ -2638,11 +1322,7 @@ const currentLng =
   }}
 >
   <MapContainer
-    center={
-      routePoints.length > 0
-        ? routePoints[Math.floor(routePoints.length / 2)]
-        : [12.9716, 77.5946]
-    }
+    center={[12.9716, 77.5946]}
     zoom={12}
     style={{ height: "100%", width: "100%" }}
   >
@@ -2651,11 +1331,17 @@ const currentLng =
       url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
     />
 
-    {routePoints.length >= 2 && (
-      <Polyline positions={routePoints} />
-    )}
+    <Polyline
+      positions={[
+        [12.9345, 77.4847],
+        [12.9365, 77.5000],
+        [12.9500, 77.5350],
+        [12.9610, 77.5650],
+        [12.9716, 77.5946],
+      ]}
+    />
 
-    <Marker position={[currentLat, currentLng]} icon={busMapIcon}>
+    <Marker position={[currentLat, currentLng]}>
 
       <Popup>
         <strong>BUSNETT</strong>
@@ -2691,7 +1377,7 @@ const currentLng =
           <div>
 
             <span>
-              ARRIVING AT {(bus.destination || "DESTINATION").toUpperCase()}
+              ARRIVING AT MAJESTIC
             </span>
 
             <h3>
@@ -2712,8 +1398,7 @@ const currentLng =
             fontSize: "13px",
           }}
         >
-          {bus.number} · {bus.origin || "Selected stop"} →{" "}
-          {bus.destination || "Destination"}
+          Route 401K · Kengeri → Majestic
         </div>
 
       </section>
@@ -2924,25 +1609,359 @@ function NavItem({
 
 
 /* =========================
+   TRIPS
+========================= */
+
+function TripsScreen() {
+  const trips = [
+    {
+      bus: "401K",
+      route: "Kengeri → Majestic",
+      date: "Today · 9:42 AM",
+      fare: "₹15",
+      status: "Completed",
+    },
+    {
+      bus: "500D",
+      route: "Kengeri → Vijayanagar",
+      date: "Yesterday · 6:18 PM",
+      fare: "₹18",
+      status: "Completed",
+    },
+    {
+      bus: "401K",
+      route: "Majestic → Kengeri",
+      date: "2 Sep · 5:34 PM",
+      fare: "₹15",
+      status: "Completed",
+    },
+  ];
+
+  return (
+    <>
+      <div className="page-header">
+        <span className="eyebrow">YOUR JOURNEY</span>
+        <h2>My Trips</h2>
+      </div>
+
+      <div
+        style={{
+          background: "#e8f7f0",
+          borderRadius: "18px",
+          padding: "14px",
+          marginBottom: "16px",
+        }}
+      >
+        <span
+          style={{
+            fontSize: "10px",
+            fontWeight: "800",
+            color: "#16865b",
+            letterSpacing: "0.8px",
+          }}
+        >
+          TRAVEL SUMMARY
+        </span>
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            marginTop: "10px",
+          }}
+        >
+          <div>
+            <strong style={{ fontSize: "20px", color: "#0f172a" }}>
+              3
+            </strong>
+            <div style={{ fontSize: "11px", color: "#64748b" }}>
+              Trips
+            </div>
+          </div>
+
+          <div>
+            <strong style={{ fontSize: "20px", color: "#0f172a" }}>
+              ₹48
+            </strong>
+            <div style={{ fontSize: "11px", color: "#64748b" }}>
+              Total fare
+            </div>
+          </div>
+
+          <div>
+            <strong style={{ fontSize: "20px", color: "#0f172a" }}>
+              38 km
+            </strong>
+            <div style={{ fontSize: "11px", color: "#64748b" }}>
+              Travelled
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="section-heading">
+        <div>
+          <span className="eyebrow">RECENT</span>
+          <h3>Journey history</h3>
+        </div>
+      </div>
+
+      <div className="bus-list">
+        {trips.map((trip, index) => (
+          <article
+            key={index}
+            style={{
+              background: "#ffffff",
+              border: "1px solid #e2e8f0",
+              borderRadius: "18px",
+              padding: "15px",
+              marginBottom: "10px",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  gap: "11px",
+                  alignItems: "center",
+                }}
+              >
+                <div className="hero-bus-icon">
+                  <BusFront size={20} />
+                </div>
+
+                <div>
+                  <strong
+                    style={{
+                      display: "block",
+                      fontSize: "15px",
+                      color: "#0f172a",
+                    }}
+                  >
+                    {trip.bus}
+                  </strong>
+
+                  <span
+                    style={{
+                      fontSize: "12px",
+                      color: "#64748b",
+                    }}
+                  >
+                    {trip.route}
+                  </span>
+                </div>
+              </div>
+
+              <strong
+                style={{
+                  fontSize: "13px",
+                  color: "#0f172a",
+                }}
+              >
+                {trip.fare}
+              </strong>
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginTop: "13px",
+                paddingTop: "11px",
+                borderTop: "1px solid #f1f5f9",
+              }}
+            >
+              <span
+                style={{
+                  fontSize: "11px",
+                  color: "#64748b",
+                }}
+              >
+                {trip.date}
+              </span>
+
+              <span
+                style={{
+                  fontSize: "10px",
+                  fontWeight: "800",
+                  color: "#16865b",
+                  background: "#e8f7f0",
+                  padding: "5px 8px",
+                  borderRadius: "8px",
+                }}
+              >
+                ✓ {trip.status}
+              </span>
+            </div>
+          </article>
+        ))}
+      </div>
+    </>
+  );
+}
+
+
+/* =========================
+   PASS
+========================= */
+
+function PassScreen() {
+  return (
+    <>
+      <div className="page-header">
+
+        <span className="eyebrow">
+          DIGITAL PASS
+        </span>
+
+        <h2>My Bus Pass</h2>
+
+      </div>
+
+
+      <div className="pass-card">
+
+        <div className="pass-top">
+
+          <div>
+            <span>BUSNETT</span>
+            <h3>Student Pass</h3>
+          </div>
+
+          <Ticket size={28} />
+
+        </div>
+
+
+        <div className="pass-details">
+
+          <div>
+            <small>VALID UNTIL</small>
+            <strong>30 SEP 2026</strong>
+          </div>
+
+          <div>
+            <small>PASS TYPE</small>
+            <strong>MONTHLY</strong>
+          </div>
+
+        </div>
+
+
+        <div className="qr-placeholder">
+
+          <div className="qr-pattern">
+            ▦
+          </div>
+
+          <span>
+            Scan to verify pass
+          </span>
+
+        </div>
+
+      </div>
+    </>
+  );
+}
+
+
+/* =========================
    PROFILE
 ========================= */
 
-function ProfileScreen() {
+function ProfileScreen({ onAuth }) {
   return (
     <>
       <div className="page-header">
         <span className="eyebrow">ACCOUNT</span>
-        <h2 style={{ color: "#0f172a", margin: 0 }}>Profile</h2>
+        <h2>Profile</h2>
       </div>
 
-      <div className="profile-card">
-        <div className="profile-avatar">Y</div>
+      <section
+        style={{
+          background: "#ffffff",
+          border: "1px solid #e2e8f0",
+          borderRadius: "22px",
+          padding: "18px",
+          marginBottom: "16px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "12px",
+          }}
+        >
+          <div
+            style={{
+              width: "48px",
+              height: "48px",
+              borderRadius: "16px",
+              background: "#e8f7f0",
+              color: "#16865b",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontWeight: "800",
+              fontSize: "18px",
+            }}
+          >
+            <UserRound size={23} />
+          </div>
 
-        <div>
-          <h3>BUSNETT Passenger</h3>
-          <p>Regular commuter</p>
+          <div style={{ flex: 1 }}>
+            <h3 style={{ margin: 0, fontSize: "17px", color: "#0f172a" }}>
+              Guest Passenger
+            </h3>
+            <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#64748b" }}>
+              You can use BUSNETT without an account.
+            </p>
+          </div>
         </div>
-      </div>
+
+        <div
+          style={{
+            background: "#f8fafc",
+            borderRadius: "14px",
+            padding: "12px",
+            marginTop: "14px",
+            fontSize: "12px",
+            lineHeight: 1.5,
+            color: "#64748b",
+          }}
+        >
+          <strong style={{ color: "#16865b" }}>OPTIONAL FEATURE</strong>
+          <br />
+          Sign in or create an account only if you want to save routes, sync
+          preferences and personalize your BUSNETT experience.
+        </div>
+
+        <button
+          onClick={onAuth}
+          style={{
+            width: "100%",
+            marginTop: "14px",
+            padding: "13px 16px",
+            borderRadius: "12px",
+            background: "#16865b",
+            color: "#ffffff",
+            fontSize: "13px",
+            fontWeight: "800",
+            cursor: "pointer",
+          }}
+        >
+          Login / Sign Up
+        </button>
+      </section>
 
       <section
         style={{
@@ -2950,7 +1969,6 @@ function ProfileScreen() {
           color: "#ffffff",
           borderRadius: "22px",
           padding: "18px",
-          marginTop: "16px",
           marginBottom: "16px",
         }}
       >
@@ -2982,48 +2000,291 @@ function ProfileScreen() {
         </p>
       </section>
 
-      <section style={{ marginTop: "18px" }}>
-        <div className="section-heading" style={{ marginBottom: "10px" }}>
-          <div>
-            <h2 style={{ margin: "4px 0 0", color: "#0f172a" }}>App Features</h2>
-          </div>
-        </div>
+      <div className="settings-list">
+        <button>
+          <span>♡</span>
+          <span>Saved routes</span>
+          <ChevronRight size={17} />
+        </button>
+
+        <button>
+          <span>🔔</span>
+          <span>Notifications</span>
+          <ChevronRight size={17} />
+        </button>
+
+        <button>
+          <span>♿</span>
+          <span>Accessibility</span>
+          <ChevronRight size={17} />
+        </button>
+
+        <button>
+          <span>🚨</span>
+          <span>Emergency / SOS</span>
+          <ChevronRight size={17} />
+        </button>
+      </div>
+    </>
+  );
+}
+
+
+/* =========================
+   OPTIONAL LOGIN / SIGN UP
+========================= */
+
+function AuthScreen({ onBack }) {
+  const [mode, setMode] = useState("login");
+  const [submitted, setSubmitted] = useState(false);
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    setSubmitted(true);
+  };
+
+  if (submitted) {
+    return (
+      <section style={{ paddingTop: "20px" }}>
+        <button className="back-button" onClick={onBack}>
+          <ArrowLeft size={20} />
+        </button>
 
         <div
           style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-            gap: "10px",
+            background: "#e8f7f0",
+            borderRadius: "22px",
+            padding: "28px 20px",
+            marginTop: "20px",
+            textAlign: "center",
           }}
         >
-          {[
-            "Live Tracking",
-            "Smart Occupancy",
-            "Route Search",
-            "Crowding Forecast",
-            "ETA Prediction",
-            "Nearby Stops",
-            "Smart Alerts",
-            "Emergency Support",
-          ].map((feature) => (
-            <div
-              key={feature}
-              style={{
-                padding: "12px 10px",
-                borderBottom: "1px solid #e2e8f0",
-                color: "#334155",
-                fontSize: "13px",
-                fontWeight: "700",
-              }}
-            >
-              {feature}
-            </div>
-          ))}
+          <div
+            style={{
+              width: "56px",
+              height: "56px",
+              margin: "0 auto 14px",
+              borderRadius: "18px",
+              background: "#16865b",
+              color: "#ffffff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: "24px",
+              fontWeight: "800",
+            }}
+          >
+            ✓
+          </div>
+
+          <span className="eyebrow">BUSNETT ACCOUNT</span>
+          <h2 style={{ margin: "8px 0 7px", color: "#0f172a" }}>
+            {mode === "login" ? "Login successful" : "Account created"}
+          </h2>
+          <p style={{ margin: 0, color: "#64748b", fontSize: "13px", lineHeight: 1.5 }}>
+            This optional account feature is ready for integration with a
+            real authentication service.
+          </p>
+
+          <button
+            onClick={onBack}
+            style={{
+              width: "100%",
+              marginTop: "18px",
+              padding: "13px 16px",
+              borderRadius: "12px",
+              background: "#16865b",
+              color: "#ffffff",
+              fontSize: "13px",
+              fontWeight: "800",
+              cursor: "pointer",
+            }}
+          >
+            Back to Profile
+          </button>
         </div>
+      </section>
+    );
+  }
+
+  return (
+    <>
+      <div className="details-header">
+        <button className="back-button" onClick={onBack}>
+          <ArrowLeft size={20} />
+        </button>
+        <div>
+          <span className="eyebrow">OPTIONAL FEATURE</span>
+          <h2>{mode === "login" ? "Login" : "Create account"}</h2>
+        </div>
+      </div>
+
+      <section
+        style={{
+          background: "#ffffff",
+          border: "1px solid #e2e8f0",
+          borderRadius: "22px",
+          padding: "18px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            background: "#f1f5f9",
+            borderRadius: "12px",
+            padding: "4px",
+            marginBottom: "18px",
+          }}
+        >
+          <button
+            onClick={() => setMode("login")}
+            style={{
+              flex: 1,
+              padding: "10px",
+              borderRadius: "9px",
+              background: mode === "login" ? "#ffffff" : "transparent",
+              color: mode === "login" ? "#16865b" : "#64748b",
+              fontWeight: "800",
+              fontSize: "12px",
+            }}
+          >
+            Login
+          </button>
+          <button
+            onClick={() => setMode("signup")}
+            style={{
+              flex: 1,
+              padding: "10px",
+              borderRadius: "9px",
+              background: mode === "signup" ? "#ffffff" : "transparent",
+              color: mode === "signup" ? "#16865b" : "#64748b",
+              fontWeight: "800",
+              fontSize: "12px",
+            }}
+          >
+            Sign Up
+          </button>
+        </div>
+
+        <div style={{ marginBottom: "18px" }}>
+          <span className="eyebrow">BUSNETT</span>
+          <h3 style={{ margin: "6px 0 5px", fontSize: "19px", color: "#0f172a" }}>
+            {mode === "login" ? "Welcome back" : "Create your BUSNETT account"}
+          </h3>
+          <p style={{ margin: 0, color: "#64748b", fontSize: "12px", lineHeight: 1.5 }}>
+            {mode === "login"
+              ? "Access your saved routes and preferences."
+              : "Save your routes and personalize your transit experience."}
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          {mode === "signup" && (
+            <label style={{ display: "block", marginBottom: "12px" }}>
+              <span style={{ display: "block", fontSize: "11px", fontWeight: "700", color: "#475569", marginBottom: "6px" }}>
+                Full name
+              </span>
+              <input
+                required
+                type="text"
+                placeholder="Enter your name"
+                style={authInputStyle}
+              />
+            </label>
+          )}
+
+          <label style={{ display: "block", marginBottom: "12px" }}>
+            <span style={{ display: "block", fontSize: "11px", fontWeight: "700", color: "#475569", marginBottom: "6px" }}>
+              E-mail
+            </span>
+            <input
+              required
+              type="email"
+              placeholder="you@example.com"
+              style={authInputStyle}
+            />
+          </label>
+
+          <label style={{ display: "block", marginBottom: "12px" }}>
+            <span style={{ display: "block", fontSize: "11px", fontWeight: "700", color: "#475569", marginBottom: "6px" }}>
+              Password
+            </span>
+            <input
+              required
+              type="password"
+              placeholder="Enter password"
+              style={authInputStyle}
+            />
+          </label>
+
+          {mode === "signup" && (
+            <label style={{ display: "block", marginBottom: "12px" }}>
+              <span style={{ display: "block", fontSize: "11px", fontWeight: "700", color: "#475569", marginBottom: "6px" }}>
+                Confirm password
+              </span>
+              <input
+                required
+                type="password"
+                placeholder="Confirm password"
+                style={authInputStyle}
+              />
+            </label>
+          )}
+
+          {mode === "login" && (
+            <div style={{ textAlign: "right", marginBottom: "14px" }}>
+              <button
+                type="button"
+                style={{ background: "transparent", color: "#16865b", fontSize: "11px", fontWeight: "700" }}
+              >
+                Forgot password?
+              </button>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            style={{
+              width: "100%",
+              padding: "13px 16px",
+              borderRadius: "12px",
+              background: "#16865b",
+              color: "#ffffff",
+              fontSize: "13px",
+              fontWeight: "800",
+              cursor: "pointer",
+            }}
+          >
+            {mode === "login" ? "Login" : "Create Account"}
+          </button>
+        </form>
+
+        <p
+          style={{
+            margin: "15px 0 0",
+            textAlign: "center",
+            fontSize: "11px",
+            color: "#64748b",
+            lineHeight: 1.5,
+          }}
+        >
+          You can always continue using BUSNETT without logging in.
+        </p>
       </section>
     </>
   );
 }
 
+const authInputStyle = {
+  width: "100%",
+  padding: "12px",
+  border: "1px solid #dbe3ea",
+  borderRadius: "11px",
+  outline: "none",
+  fontFamily: "inherit",
+  fontSize: "12px",
+  color: "#0f172a",
+  background: "#ffffff",
+};
 
 export default App;
