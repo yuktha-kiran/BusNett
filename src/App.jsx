@@ -742,123 +742,7 @@ const updateOccupancy = (busNumber, newOccupancy) => {
             </div>
           )}
 
-          {activeScreen === "home" && (
-            <HomeScreen
-              lastSynced={lastSynced}
-              buses={displayBuses}
-              from={searchFrom}
-              to={searchTo}
-              setFrom={setSearchFrom}
-              setTo={setSearchTo}
-              onSearch={(from, to) => {
-                setSearchFrom(from);
-                setSearchTo(to);
-                searchRealRoutes(from, to);
-                setActiveScreen("search");
-              }}
-              onNearby={() => setActiveScreen("nearby")}
-              onSaved={() => setActiveScreen("saved")}
-            />
-          )}
-
-          {activeScreen === "search" && (
-  <SearchScreen
-    buses={routeResults}
-    loading={searchLoading}
-    error={searchError}
-    initialFrom={searchFrom}
-    initialTo={searchTo}
-    onSearch={(from, to) => {
-      setSearchFrom(from);
-      setSearchTo(to);
-      searchRealRoutes(from, to);
-    }}
-    onBack={() => setActiveScreen("home")}
-    onSelectBus={(bus) => {
-      setSelectedBus(bus);
-      setActiveScreen("details");
-    }}
-  />
-)}
-
-          {activeScreen === "nearby" && (
-            <NearbyBusesScreen
-              buses={displayBuses}
-              onBack={() => setActiveScreen("home")}
-              onSelectBus={(bus) => {
-                setSelectedBus(bus);
-                setActiveScreen("details");
-              }}
-              onTrackBus={(bus) => {
-                setSelectedBus(bus);
-                setActiveScreen("tracking");
-              }}
-            />
-          )}
-
-          {activeScreen === "notifications" && (
-            <NotificationsScreen
-              buses={displayBuses}
-              arrivalAlert={arrivalAlert}
-              arrivalAlertHistory={arrivalAlertHistory}
-              onDismissAlert={() => setArrivalAlert(null)}
-              onBack={() => setActiveScreen("home")}
-            />
-          )}
-
-          {activeScreen === "saved" && (
-            <SavedRoutesScreen
-              savedRoutes={savedRoutes}
-              onBack={() => setActiveScreen("home")}
-              onRemove={(route) =>
-                setSavedRoutes((prev) =>
-                  prev.filter(
-                    (item) =>
-                      item.from !== route.from || item.to !== route.to
-                  )
-                )
-              }
-              onSelect={() => setActiveScreen("search")}
-              onTrack={trackSavedTrip}
-            />
-          )}
-
-          {activeScreen === "details" && selectedBus && (
-            <BusDetailsScreen
-              bus={selectedBus}
-              onBack={() => setActiveScreen("search")}
-              onTrack={() => setActiveScreen("tracking")}
-              userAccount={userAccount}
-              onSaveTrip={saveCurrentTrip}
-              onRequireAuth={requireAccount}
-            />
-          )}
-
-          {activeScreen === "tracking" && selectedBus && (
-            <TrackingScreen
-              bus={selectedBus}
-              onBack={() => setActiveScreen("details")}
-            />
-          )}
-
-          {activeScreen === "profile" && (
-            <ProfileScreen
-              userAccount={userAccount}
-              savedTrips={savedTrips}
-              onLogin={() => {
-                setAuthError("");
-                setAuthMode("login");
-              }}
-              onSignup={() => {
-                setAuthError("");
-                setAuthMode("signup");
-              }}
-              onLogout={handleLogout}
-              onOpenSaved={() => setActiveScreen("saved")}
-            />
-          )}
-
-          {authMode && (
+          {authMode ? (
             <AuthScreen
               mode={authMode}
               loading={authLoading}
@@ -873,11 +757,130 @@ const updateOccupancy = (busNumber, newOccupancy) => {
               }}
               onSubmit={handleAuth}
             />
+          ) : (
+            <>
+              {activeScreen === "home" && (
+                <HomeScreen
+                  lastSynced={lastSynced}
+                  buses={displayBuses}
+                  from={searchFrom}
+                  to={searchTo}
+                  setFrom={setSearchFrom}
+                  setTo={setSearchTo}
+                  onSearch={(from, to) => {
+                    setSearchFrom(from);
+                    setSearchTo(to);
+                    searchRealRoutes(from, to);
+                    setActiveScreen("search");
+                  }}
+                  onNearby={() => setActiveScreen("nearby")}
+                  onSaved={() => setActiveScreen("saved")}
+                />
+              )}
+
+              {activeScreen === "search" && (
+                <SearchScreen
+                  buses={routeResults}
+                  loading={searchLoading}
+                  error={searchError}
+                  initialFrom={searchFrom}
+                  initialTo={searchTo}
+                  onSearch={(from, to) => {
+                    setSearchFrom(from);
+                    setSearchTo(to);
+                    searchRealRoutes(from, to);
+                  }}
+                  onBack={() => setActiveScreen("home")}
+                  onSelectBus={(bus) => {
+                    setSelectedBus(bus);
+                    setActiveScreen("details");
+                  }}
+                />
+              )}
+
+              {activeScreen === "nearby" && (
+                <NearbyBusesScreen
+                  buses={displayBuses}
+                  onBack={() => setActiveScreen("home")}
+                  onSelectBus={(bus) => {
+                    setSelectedBus(bus);
+                    setActiveScreen("details");
+                  }}
+                  onTrackBus={(bus) => {
+                    setSelectedBus(bus);
+                    setActiveScreen("tracking");
+                  }}
+                />
+              )}
+
+              {activeScreen === "notifications" && (
+                <NotificationsScreen
+                  buses={displayBuses}
+                  arrivalAlert={arrivalAlert}
+                  arrivalAlertHistory={arrivalAlertHistory}
+                  onDismissAlert={() => setArrivalAlert(null)}
+                  onBack={() => setActiveScreen("home")}
+                />
+              )}
+
+              {activeScreen === "saved" && (
+                <SavedRoutesScreen
+                  savedRoutes={savedRoutes}
+                  onBack={() => setActiveScreen("home")}
+                  onRemove={(route) =>
+                    setSavedRoutes((prev) =>
+                      prev.filter(
+                        (item) =>
+                          item.from !== route.from || item.to !== route.to
+                      )
+                    )
+                  }
+                  onSelect={() => setActiveScreen("search")}
+                  onTrack={trackSavedTrip}
+                />
+              )}
+
+              {activeScreen === "details" && selectedBus && (
+                <BusDetailsScreen
+                  bus={selectedBus}
+                  onBack={() => setActiveScreen("search")}
+                  onTrack={() => setActiveScreen("tracking")}
+                  userAccount={userAccount}
+                  onSaveTrip={saveCurrentTrip}
+                  onRequireAuth={requireAccount}
+                />
+              )}
+
+              {activeScreen === "tracking" && selectedBus && (
+                <TrackingScreen
+                  bus={selectedBus}
+                  onBack={() => setActiveScreen("details")}
+                />
+              )}
+
+              {activeScreen === "profile" && (
+                <ProfileScreen
+                  userAccount={userAccount}
+                  savedTrips={savedTrips}
+                  onLogin={() => {
+                    setAuthError("");
+                    setAuthMode("login");
+                  }}
+                  onSignup={() => {
+                    setAuthError("");
+                    setAuthMode("signup");
+                  }}
+                  onLogout={handleLogout}
+                  onOpenSaved={() => setActiveScreen("saved")}
+                />
+              )}
+            </>
           )}
 
         </main>
 
-        <nav className="bottom-nav">
+        {!authMode && (
+          <nav className="bottom-nav">
 
             <NavItem
               icon={<Home size={21} />}
@@ -893,7 +896,8 @@ const updateOccupancy = (busNumber, newOccupancy) => {
               onClick={() => goToTab("profile")}
             />
 
-        </nav>
+          </nav>
+        )}
 
       </div>
     </div>
@@ -1345,7 +1349,10 @@ function NearbyBusesScreen({ buses, onBack, onSelectBus, onTrackBus }) {
 
   return (
     <>
-      <div className="search-page-header">
+      <div
+        className="search-page-header"
+        style={{ marginBottom: "12px" }}
+      >
         <button className="back-button" onClick={onBack}>
           <ArrowLeft size={20} />
         </button>
@@ -1360,8 +1367,8 @@ function NearbyBusesScreen({ buses, onBack, onSelectBus, onTrackBus }) {
         style={{
           background: "#e8f7f0",
           borderRadius: "20px",
-          padding: "16px",
-          marginBottom: "16px",
+          padding: "14px 16px",
+          marginBottom: "13px",
         }}
       >
         <div
@@ -3479,6 +3486,17 @@ function AuthScreen({
   onSubmit,
 }) {
   const isSignup = mode === "signup";
+
+  useEffect(() => {
+    const resetAuthScroll = () => {
+      const content = document.querySelector(".content");
+      if (content) content.scrollTop = 0;
+      window.scrollTo(0, 0);
+    };
+
+    requestAnimationFrame(resetAuthScroll);
+  }, [mode]);
+
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

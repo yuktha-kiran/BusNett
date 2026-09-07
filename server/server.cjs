@@ -2,6 +2,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
+const crypto = require("crypto");
 
 const PORT = 5000;
 
@@ -11,6 +12,98 @@ const STOPS_FILE = path.join(GTFS_DIR, "stops.txt");
 const ROUTES_FILE = path.join(GTFS_DIR, "routes.txt");
 const TRIPS_FILE = path.join(GTFS_DIR, "trips.txt");
 const STOP_TIMES_FILE = path.join(GTFS_DIR, "stop_times.txt");
+
+// ======================================================
+// OPTIONAL PASSENGER ACCOUNT STORE
+// ======================================================
+
+const USERS_FILE = path.join(__dirname, "..", "data", "users.json");
+const sessions = new Map();
+
+function loadUsers() {
+  try {
+    if (!fs.existsSync(USERS_FILE)) {
+      fs.mkdirSync(path.dirname(USERS_FILE), { recursive: true });
+      fs.writeFileSync(USERS_FILE, "[]", "utf8");
+    }
+
+    return JSON.parse(fs.readFileSync(USERS_FILE, "utf8") || "[]");
+  } catch (error) {
+    console.error("Unable to load BUSNETT users:", error);
+    return [];
+  }
+}
+
+let users = loadUsers();
+
+function saveUsers() {
+  fs.mkdirSync(path.dirname(USERS_FILE), { recursive: true });
+  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), "utf8");
+}
+
+function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return { salt, hash };
+}
+
+function verifyPassword(password, storedHash, salt) {
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return crypto.timingSafeEqual(
+    Buffer.from(hash, "hex"),
+    Buffer.from(storedHash, "hex")
+  );
+}
+
+function publicUser(user, token) {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    token,
+  };
+}
+
+function getAuthenticatedUser(req) {
+  const header = req.headers.authorization || "";
+  if (!header.startsWith("Bearer ")) return null;
+
+  const token = header.slice(7);
+  const userId = sessions.get(token);
+  if (!userId) return null;
+
+  return users.find((user) => user.id === userId) || null;
+}
+
+function readRequestBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+
+    req.on("data", (chunk) => {
+      body += chunk;
+
+      if (body.length > 1024 * 1024) {
+        reject(new Error("Request body too large"));
+        req.destroy();
+      }
+    });
+
+    req.on("end", () => {
+      if (!body) {
+        resolve({});
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(body));
+      } catch {
+        reject(new Error("Invalid JSON"));
+      }
+    });
+
+    req.on("error", reject);
+  });
+}
+
 
 // ======================================================
 // DATA
@@ -127,7 +220,7 @@ async function readGTFS(filePath, callback) {
 // ======================================================
 
 async function loadStops() {
-  console.log("🚏 Loading BMTC stops...");
+  console.log("Loading BMTC stops...");
 
   await readGTFS(
     STOPS_FILE,
@@ -150,7 +243,7 @@ async function loadStops() {
   stats.stops = stops.size;
 
   console.log(
-    `✅ ${stats.stops.toLocaleString()} stops loaded`
+    `${stats.stops.toLocaleString()} stops loaded`
   );
 }
 
@@ -159,7 +252,7 @@ async function loadStops() {
 // ======================================================
 
 async function loadRoutes() {
-  console.log("🚌 Loading BMTC routes...");
+  console.log("Loading BMTC routes...");
 
   await readGTFS(
     ROUTES_FILE,
@@ -188,7 +281,7 @@ async function loadRoutes() {
   stats.routes = routes.size;
 
   console.log(
-    `✅ ${stats.routes.toLocaleString()} routes loaded`
+    `${stats.routes.toLocaleString()} routes loaded`
   );
 }
 
@@ -197,7 +290,7 @@ async function loadRoutes() {
 // ======================================================
 
 async function loadTrips() {
-  console.log("🧭 Loading BMTC trips...");
+  console.log("Loading BMTC trips...");
 
   await readGTFS(
     TRIPS_FILE,
@@ -228,7 +321,7 @@ async function loadTrips() {
   stats.trips = trips.size;
 
   console.log(
-    `✅ ${stats.trips.toLocaleString()} trips loaded`
+    `${stats.trips.toLocaleString()} trips loaded`
   );
 }
 
@@ -245,9 +338,9 @@ async function loadTrips() {
 // ======================================================
 
 async function loadStopTimes() {
-  console.log("📍 Processing stop_times.txt...");
+  console.log("Processing stop_times.txt...");
   console.log(
-    "⏳ Building BMTC route-stop index..."
+    "Building BMTC route-stop index..."
   );
 
   const stream =
@@ -399,11 +492,11 @@ async function loadStopTimes() {
     patterns.size;
 
   console.log(
-    `✅ ${stats.stopTimes.toLocaleString()} stop-time records processed`
+    `${stats.stopTimes.toLocaleString()} stop-time records processed`
   );
 
   console.log(
-    `✅ ${stats.patterns.toLocaleString()} route patterns created`
+    `${stats.patterns.toLocaleString()} route patterns created`
   );
 }
 
@@ -823,65 +916,253 @@ function findDirectRoutes(
 }
 
 // ======================================================
-// SMART OCCUPANCY
+// SMART OCCUPANCY + LIVE BUS SIMULATOR
 // ======================================================
 
-const occupancy =
-  new Map();
+/*
+  Exhibition-safe simulation of the data pipeline BUSNETT would
+  receive from BMTC's live systems.
 
-function getOccupancy(
-  routeNumber
-) {
-  if (
-    !occupancy.has(
-      routeNumber
-    )
-  ) {
-    occupancy.set(
-      routeNumber,
-      Math.floor(
-        Math.random() * 51
-      ) + 25
-    );
-  }
+  GPS simulation:
+    - Uses real BMTC GTFS stop coordinates.
+    - A demo bus moves continuously between the real stops on its
+      selected route pattern.
+    - ETA is calculated from the simulated position and speed.
 
-  return occupancy.get(
-    routeNumber
+  SmartOccupancy simulation:
+    - Uses simulated, anonymized ticket transactions.
+    - Each ticket contains only boarding stop + destination stop.
+    - When a bus reaches a stop, passengers whose destination is that
+      stop alight and new ticket transactions board.
+    - Occupancy follows: O_new = O_previous - Alighting + Boarding.
+*/
+
+const DEMO_BUS_CONFIG = {
+  "401K": {
+    capacity: 60,
+    speedKmh: 24,
+    startOccupancy: 32,
+    from: "Kengeri",
+    to: "Majestic",
+  },
+  "500D": {
+    capacity: 60,
+    speedKmh: 22,
+    startOccupancy: 41,
+    from: "Kengeri",
+    to: "Majestic",
+  },
+  "500A": {
+    capacity: 60,
+    speedKmh: 25,
+    startOccupancy: 29,
+    from: "Kengeri",
+    to: "Shivajinagar",
+  },
+};
+
+const simulatedBuses = new Map();
+
+function distanceKm(a, b) {
+  if (!a || !b) return 0;
+  const lat1 = Number(a.lat) * Math.PI / 180;
+  const lat2 = Number(b.lat) * Math.PI / 180;
+  const dLat = (Number(b.lat) - Number(a.lat)) * Math.PI / 180;
+  const dLng = (Number(b.lng) - Number(a.lng)) * Math.PI / 180;
+  const h = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function findDemoRoute(routeNumber, from, to) {
+  if (!gtfsReady) return null;
+  const matches = findDirectRoutes(from, to).filter(
+    (route) => String(route.routeNumber).toUpperCase() === String(routeNumber).toUpperCase()
   );
+  return matches[0] || null;
 }
 
-function updateOccupancy() {
-  for (
-    const [
-      route,
-      current,
-    ] of occupancy
-  ) {
-    const change =
-      Math.floor(
-        Math.random() * 9
-      ) - 4;
+function createTicketSimulation(bus, routeStops) {
+  // Deterministic ticket set for the prototype. No passenger identity is stored.
+  const tickets = [];
+  const start = Math.min(3, Math.max(1, routeStops.length - 1));
 
-    const next =
-      Math.max(
-        10,
-        Math.min(
-          95,
-          current + change
-        )
-      );
-
-    occupancy.set(
-      route,
-      next
+  for (let i = 0; i < 18; i++) {
+    const boardingIndex = Math.min(start, Math.floor(i / 6));
+    const destinationIndex = Math.min(
+      routeStops.length - 1,
+      boardingIndex + 2 + (i % Math.max(1, routeStops.length - boardingIndex - 1))
     );
+    if (destinationIndex <= boardingIndex) continue;
+
+    tickets.push({
+      id: `${bus}-T${i + 1}`,
+      boardingStopIndex: boardingIndex,
+      destinationStopIndex: destinationIndex,
+    });
   }
+
+  return tickets;
 }
 
-setInterval(
-  updateOccupancy,
-  7000
-);
+function initializeDemoBuses() {
+  if (!gtfsReady) return;
+
+  for (const [routeNumber, config] of Object.entries(DEMO_BUS_CONFIG)) {
+    const route = findDemoRoute(routeNumber, config.from, config.to);
+    if (!route || !Array.isArray(route.stops) || route.stops.length < 2) {
+      console.log(`Demo route ${routeNumber} could not be initialized from GTFS.`);
+      continue;
+    }
+
+    const now = Date.now();
+    simulatedBuses.set(routeNumber, {
+      routeNumber,
+      routeId: route.routeId,
+      headsign: route.headsign,
+      routeName: route.routeName,
+      stops: route.stops,
+      capacity: config.capacity,
+      speedKmh: config.speedKmh,
+      from: config.from,
+      to: config.to,
+      segmentIndex: 0,
+      segmentProgress: 0.18,
+      lastUpdate: now,
+      lastProcessedStop: -1,
+      occupancy: config.startOccupancy,
+      tickets: createTicketSimulation(routeNumber, route.stops),
+      startedAt: now,
+    });
+  }
+
+  console.log(`Live bus simulator initialized for ${simulatedBuses.size} demo buses.`);
+}
+
+function processStopTransactions(bus, stopIndex) {
+  const alighting = bus.tickets.filter(
+    (ticket) => ticket.destinationStopIndex === stopIndex
+  ).length;
+
+  const boarding = 2 + ((stopIndex * 3 + bus.routeNumber.length) % 7);
+
+  bus.tickets = bus.tickets.filter(
+    (ticket) => ticket.destinationStopIndex !== stopIndex
+  );
+
+  bus.occupancy = Math.max(
+    0,
+    Math.min(bus.capacity, bus.occupancy - alighting + boarding)
+  );
+
+  // Add a new anonymized ticket batch for the next part of the route.
+  const maxDestination = bus.stops.length - 1;
+  for (let i = 0; i < boarding; i++) {
+    const destinationStopIndex = Math.min(
+      maxDestination,
+      stopIndex + 1 + ((i + stopIndex) % Math.max(1, maxDestination - stopIndex))
+    );
+
+    if (destinationStopIndex > stopIndex) {
+      bus.tickets.push({
+        id: `${bus.routeNumber}-${Date.now()}-${i}`,
+        boardingStopIndex: stopIndex,
+        destinationStopIndex,
+      });
+    }
+  }
+
+  return { boarding, alighting };
+}
+
+function updateSimulatedBus(bus) {
+  const now = Date.now();
+  const elapsedSeconds = Math.max(0, (now - bus.lastUpdate) / 1000);
+  bus.lastUpdate = now;
+
+  let remainingDistance = bus.speedKmh * (elapsedSeconds / 3600);
+  let transactionSummary = { boarding: 0, alighting: 0 };
+
+  while (remainingDistance > 0 && bus.segmentIndex < bus.stops.length - 1) {
+    const fromStop = bus.stops[bus.segmentIndex];
+    const toStop = bus.stops[bus.segmentIndex + 1];
+    const segmentDistance = Math.max(0.05, distanceKm(fromStop, toStop));
+    const remainingOnSegment = segmentDistance * (1 - bus.segmentProgress);
+
+    if (remainingDistance < remainingOnSegment) {
+      bus.segmentProgress += remainingDistance / segmentDistance;
+      remainingDistance = 0;
+    } else {
+      remainingDistance -= remainingOnSegment;
+      bus.segmentIndex += 1;
+      bus.segmentProgress = 0;
+
+      if (bus.segmentIndex !== bus.lastProcessedStop) {
+        const result = processStopTransactions(bus, bus.segmentIndex);
+        transactionSummary.boarding += result.boarding;
+        transactionSummary.alighting += result.alighting;
+        bus.lastProcessedStop = bus.segmentIndex;
+      }
+    }
+  }
+
+  // Restart the demonstration once the bus reaches the final stop.
+  if (bus.segmentIndex >= bus.stops.length - 1) {
+    bus.segmentIndex = 0;
+    bus.segmentProgress = 0;
+    bus.lastProcessedStop = -1;
+    bus.tickets = createTicketSimulation(bus.routeNumber, bus.stops);
+    bus.occupancy = Math.max(20, Math.min(bus.capacity, bus.occupancy));
+  }
+
+  return transactionSummary;
+}
+
+function getSimulatedBusData(bus) {
+  updateSimulatedBus(bus);
+
+  const currentStop = bus.stops[bus.segmentIndex];
+  const nextStop = bus.stops[Math.min(bus.segmentIndex + 1, bus.stops.length - 1)];
+
+  const lat = currentStop.lat + (nextStop.lat - currentStop.lat) * bus.segmentProgress;
+  const lng = currentStop.lng + (nextStop.lng - currentStop.lng) * bus.segmentProgress;
+
+  const remainingToNext = Math.max(
+    0,
+    distanceKm({ lat, lng }, nextStop)
+  );
+
+  const etaMinutes = Math.max(
+    0,
+    Math.ceil((remainingToNext / bus.speedKmh) * 60)
+  );
+
+  const occupancyPercent = Math.round((bus.occupancy / bus.capacity) * 100);
+
+  return {
+    bus: bus.routeNumber,
+    routeId: bus.routeId,
+    route: `${bus.from} → ${bus.to}`,
+    headsign: bus.headsign || bus.to,
+    status: "On Time",
+    capacity: bus.capacity,
+    occupancy: bus.occupancy,
+    occupancyPercent,
+    occupancySource: "SmartOccupancy — simulated ticket transactions",
+    eta: etaMinutes,
+    etaSource: "Simulated GPS position + route distance + speed",
+    speedKmh: bus.speedKmh,
+    currentStop: currentStop.name,
+    nextStop: nextStop.name,
+    latitude: Number(lat.toFixed(6)),
+    longitude: Number(lng.toFixed(6)),
+    routeStops: bus.stops,
+  };
+}
+
+function getLiveDemoBuses() {
+  return Array.from(simulatedBuses.values()).map(getSimulatedBusData);
+}
 
 // ======================================================
 // JSON RESPONSE
@@ -902,10 +1183,10 @@ function sendJSON(
         "*",
 
       "Access-Control-Allow-Methods":
-        "GET, OPTIONS",
+        "GET, POST, DELETE, OPTIONS",
 
       "Access-Control-Allow-Headers":
-        "Content-Type",
+        "Content-Type, Authorization",
     }
   );
 
@@ -920,7 +1201,7 @@ function sendJSON(
 
 const server =
   http.createServer(
-    (req, res) => {
+    async (req, res) => {
 
       // ----------------------------------------------
       // OPTIONS
@@ -937,10 +1218,10 @@ const server =
               "*",
 
             "Access-Control-Allow-Methods":
-              "GET, OPTIONS",
+              "GET, POST, DELETE, OPTIONS",
 
             "Access-Control-Allow-Headers":
-              "Content-Type",
+              "Content-Type, Authorization",
           }
         );
 
@@ -957,6 +1238,230 @@ const server =
 
       const pathname =
         url.pathname;
+
+      // ----------------------------------------------
+      // OPTIONAL AUTHENTICATION
+      // ----------------------------------------------
+
+      if (
+        req.method === "POST" &&
+        (pathname === "/api/auth/signup" ||
+          pathname === "/api/auth/login")
+      ) {
+        try {
+          const body = await readRequestBody(req);
+          const email = String(body.email || "").trim().toLowerCase();
+          const password = String(body.password || "");
+          const name = String(body.name || "").trim();
+
+          if (!email || !password) {
+            sendJSON(res, 400, {
+              success: false,
+              message: "Email and password are required.",
+            });
+            return;
+          }
+
+          if (password.length < 6) {
+            sendJSON(res, 400, {
+              success: false,
+              message: "Password must be at least 6 characters.",
+            });
+            return;
+          }
+
+          if (pathname === "/api/auth/signup") {
+            if (!name) {
+              sendJSON(res, 400, {
+                success: false,
+                message: "Name is required.",
+              });
+              return;
+            }
+
+            if (users.some((user) => user.email === email)) {
+              sendJSON(res, 409, {
+                success: false,
+                message: "An account with this email already exists.",
+              });
+              return;
+            }
+
+            const { salt, hash } = hashPassword(password);
+
+            const user = {
+              id: crypto.randomUUID(),
+              name,
+              email,
+              passwordHash: hash,
+              passwordSalt: salt,
+              trips: [],
+              createdAt: new Date().toISOString(),
+            };
+
+            users.push(user);
+            saveUsers();
+
+            const token = crypto.randomBytes(32).toString("hex");
+            sessions.set(token, user.id);
+
+            sendJSON(res, 201, {
+              success: true,
+              user: publicUser(user, token),
+            });
+            return;
+          }
+
+          const user = users.find((item) => item.email === email);
+
+          if (
+            !user ||
+            !verifyPassword(
+              password,
+              user.passwordHash,
+              user.passwordSalt
+            )
+          ) {
+            sendJSON(res, 401, {
+              success: false,
+              message: "Email or password is incorrect.",
+            });
+            return;
+          }
+
+          const token = crypto.randomBytes(32).toString("hex");
+          sessions.set(token, user.id);
+
+          sendJSON(res, 200, {
+            success: true,
+            user: publicUser(user, token),
+          });
+          return;
+        } catch (error) {
+          sendJSON(res, 400, {
+            success: false,
+            message: error.message || "Unable to process account request.",
+          });
+          return;
+        }
+      }
+
+      // ----------------------------------------------
+      // OPTIONAL SAVED TRIPS
+      // ----------------------------------------------
+
+      if (
+        pathname === "/api/trips" &&
+        req.method === "POST"
+      ) {
+        const user = getAuthenticatedUser(req);
+
+        if (!user) {
+          sendJSON(res, 401, {
+            success: false,
+            message: "Login is required to save trips.",
+          });
+          return;
+        }
+
+        try {
+          const body = await readRequestBody(req);
+
+          const from = String(body.from || "").trim();
+          const to = String(body.to || "").trim();
+          const busNumber = String(body.busNumber || "").trim();
+          const routeId = String(body.routeId || "").trim();
+
+          if (!from || !to || !busNumber) {
+            sendJSON(res, 400, {
+              success: false,
+              message: "From, to and bus number are required.",
+            });
+            return;
+          }
+
+          const alreadySaved = user.trips.some(
+            (trip) =>
+              trip.from.toLowerCase() === from.toLowerCase() &&
+              trip.to.toLowerCase() === to.toLowerCase() &&
+              trip.busNumber.toUpperCase() === busNumber.toUpperCase()
+          );
+
+          if (!alreadySaved) {
+            user.trips.unshift({
+              id: crypto.randomUUID(),
+              from,
+              to,
+              busNumber,
+              routeId,
+              savedAt: new Date().toISOString(),
+            });
+
+            user.trips = user.trips.slice(0, 10);
+            saveUsers();
+          }
+
+          sendJSON(res, 200, {
+            success: true,
+            trips: user.trips,
+          });
+          return;
+        } catch (error) {
+          sendJSON(res, 400, {
+            success: false,
+            message: error.message || "Unable to save trip.",
+          });
+          return;
+        }
+      }
+
+      if (
+        pathname.startsWith("/api/trips/") &&
+        req.method === "DELETE"
+      ) {
+        const user = getAuthenticatedUser(req);
+
+        if (!user) {
+          sendJSON(res, 401, {
+            success: false,
+            message: "Login is required.",
+          });
+          return;
+        }
+
+        const tripId = pathname.split("/").pop();
+        user.trips = user.trips.filter((trip) => trip.id !== tripId);
+        saveUsers();
+
+        sendJSON(res, 200, {
+          success: true,
+          trips: user.trips,
+        });
+        return;
+      }
+
+      if (
+        pathname.startsWith("/api/users/") &&
+        pathname.endsWith("/trips") &&
+        req.method === "GET"
+      ) {
+        const user = getAuthenticatedUser(req);
+        const requestedUserId = pathname.split("/")[3];
+
+        if (!user || user.id !== requestedUserId) {
+          sendJSON(res, 401, {
+            success: false,
+            message: "Unauthorized.",
+          });
+          return;
+        }
+
+        sendJSON(res, 200, {
+          success: true,
+          trips: user.trips || [],
+        });
+        return;
+      }
 
       // ----------------------------------------------
       // HEALTH
@@ -1091,7 +1596,7 @@ const server =
         }
 
         console.log(
-          `🔎 ${from} → ${to}`
+          `${from} → ${to}`
         );
 
         const results =
@@ -1101,7 +1606,7 @@ const server =
           );
 
         console.log(
-          `   🚌 ${results.length} direct routes found`
+          `   ${results.length} direct routes found`
         );
 
         sendJSON(
@@ -1175,83 +1680,28 @@ const server =
         pathname ===
         "/api/buses"
       ) {
-        const buses = [
-          {
-            bus: "401K",
+        if (!gtfsReady) {
+          sendJSON(res, 503, {
+            success: false,
+            message: "BMTC dataset is still loading.",
+          });
+          return;
+        }
 
-            occupancy:
-              getOccupancy(
-                "401K"
-              ),
+        const buses = getLiveDemoBuses();
 
-            eta: 4,
-
-            capacity: 100,
-
-            route:
-              "Kengeri → Majestic",
-
-            status:
-              "On Time",
+        sendJSON(res, 200, {
+          success: true,
+          source: "BUSNETT Cloud",
+          engine: "SmartOccupancy",
+          updatedAt: new Date().toISOString(),
+          simulation: {
+            gps: true,
+            ticketTransactions: true,
+            formula: "O_new = O_previous - Alighting + Boarding",
           },
-
-          {
-            bus: "500D",
-
-            occupancy:
-              getOccupancy(
-                "500D"
-              ),
-
-            eta: 7,
-
-            capacity: 100,
-
-            route:
-              "Kengeri → Majestic",
-
-            status:
-              "On Time",
-          },
-
-          {
-            bus: "500A",
-
-            occupancy:
-              getOccupancy(
-                "500A"
-              ),
-
-            eta: 11,
-
-            capacity: 100,
-
-            route:
-              "Kengeri → Shivajinagar",
-
-            status:
-              "On Time",
-          },
-        ];
-
-        sendJSON(
-          res,
-          200,
-          {
-            success: true,
-
-            source:
-              "BUSNETT Cloud",
-
-            engine:
-              "SmartOccupancy",
-
-            updatedAt:
-              new Date().toISOString(),
-
-            buses,
-          }
-        );
+          buses,
+        });
 
         return;
       }
@@ -1284,7 +1734,7 @@ async function initialize() {
       "=========================================="
     );
     console.log(
-      "🚍 BUSNETT REAL BMTC BACKEND"
+      "BUSNETT REAL BMTC BACKEND"
     );
     console.log(
       "=========================================="
@@ -1292,7 +1742,7 @@ async function initialize() {
     console.log("");
 
     console.log(
-      `📂 Dataset: ${GTFS_DIR}`
+      `Dataset: ${GTFS_DIR}`
     );
 
     if (
@@ -1315,56 +1765,58 @@ async function initialize() {
 
     gtfsReady = true;
 
+    initializeDemoBuses();
+
     console.log("");
     console.log(
       "=========================================="
     );
     console.log(
-      "✅ BMTC GTFS READY"
+      "BMTC GTFS READY"
     );
     console.log(
       "=========================================="
     );
 
     console.log(
-      `🚏 Stops: ${stats.stops.toLocaleString()}`
+      `Stops: ${stats.stops.toLocaleString()}`
     );
 
     console.log(
-      `🚌 Routes: ${stats.routes.toLocaleString()}`
+      `Routes: ${stats.routes.toLocaleString()}`
     );
 
     console.log(
-      `🧭 Trips: ${stats.trips.toLocaleString()}`
+      `Trips: ${stats.trips.toLocaleString()}`
     );
 
     console.log(
-      `📍 Stop-time records: ${stats.stopTimes.toLocaleString()}`
+      `Stop-time records: ${stats.stopTimes.toLocaleString()}`
     );
 
     console.log(
-      `🛣️ Route patterns: ${stats.patterns.toLocaleString()}`
+      `Route patterns: ${stats.patterns.toLocaleString()}`
     );
 
     console.log("");
 
     console.log(
-      "🔎 Real BMTC route search: READY"
+      "Real BMTC route search: READY"
     );
 
     console.log(
-      "🧠 SmartOccupancy: ACTIVE"
+      "SmartOccupancy: ACTIVE"
     );
 
     console.log(
-      "📱 BUSNETT passenger API: READY"
+      "BUSNETT passenger API: READY"
     );
 
     console.log("");
   } catch (error) {
     console.error("");
     console.error(
-      "❌ BMTC initialization failed"
+      "BMTC initialization failed"
     );
     console.error(error);
     console.error("");
@@ -1379,11 +1831,11 @@ server.listen(
   PORT,
   () => {
     console.log(
-      `☁️ BUSNETT Cloud API: http://localhost:${PORT}`
+      `BUSNETT Cloud API: http://localhost:${PORT}`
     );
 
     console.log(
-      "🧠 SmartOccupancy Engine active"
+      "SmartOccupancy Engine active"
     );
 
     initialize();
