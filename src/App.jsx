@@ -24,6 +24,7 @@ import {
   TrendingUp,
   Gauge,
   RefreshCw,
+  ArrowUpDown,
 } from "lucide-react";
 import "./App.css";
 
@@ -1969,22 +1970,27 @@ function SearchScreen({
           type="button"
           onClick={swapLocations}
           aria-label="Swap starting point and destination"
+          title="Swap stops"
           style={{
             position: "absolute",
             right: "12px",
             top: "50%",
             transform: "translateY(-50%)",
-            width: "32px",
-            height: "32px",
-            borderRadius: "10px",
+            width: "40px",
+            height: "40px",
+            borderRadius: "12px",
             border: "1px solid #dbe3ea",
             background: "#ffffff",
+            color: "#16865b",
             cursor: "pointer",
-            fontSize: "16px",
-            fontWeight: "800",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 5,
+            boxShadow: "0 2px 8px rgba(15,23,42,0.06)",
           }}
         >
-          ⇅
+          <ArrowUpDown size={20} strokeWidth={2.5} />
         </button>
 
         <div className="route-connector" />
