@@ -95,7 +95,7 @@ function getFareForDistance(distanceKm) {
 
 const buses = [
   {
-    number: "401K",
+    number: "O EXP-226N",
     destination: "Majestic",
     eta: "4 min",
     occupancy: 32,
@@ -104,7 +104,7 @@ const buses = [
     recommended: true,
   },
   {
-    number: "500D",
+    number: "226-Q",
     destination: "Majestic",
     eta: "7 min",
     occupancy: 68,
@@ -113,7 +113,7 @@ const buses = [
     recommended: false,
   },
   {
-    number: "500A",
+    number: "227-VB",
     destination: "Shivajinagar",
     eta: "11 min",
     occupancy: 48,
@@ -167,21 +167,21 @@ const [searchError, setSearchError] = useState("");
   const [searchFrom, setSearchFrom] = useState("");
   const [searchTo, setSearchTo] = useState("");
 const [busOccupancies, setBusOccupancies] = useState({
-  "401K": 32,
-  "500D": 68,
-  "500A": 48,
+  "O EXP-226N": 32,
+  "226-Q": 41,
+  "227-VB": 29,
 });
   const [cloudOccupancies, setCloudOccupancies] = useState({
-    "401K": 32,
-    "500D": 68,
-    "500A": 48,
+    "O EXP-226N": 32,
+    "226-Q": 41,
+    "227-VB": 29,
   });
 
   const [lastSynced, setLastSynced] = useState(new Date());
   const [liveEtas, setLiveEtas] = useState({
-    "401K": 4,
-    "500D": 7,
-    "500A": 11,
+    "O EXP-226N": 4,
+    "226-Q": 7,
+    "227-VB": 11,
   });
   const [arrivalAlert, setArrivalAlert] = useState(null);
   const [arrivalAlertHistory, setArrivalAlertHistory] = useState([]);
@@ -929,21 +929,19 @@ const updateOccupancy = (busNumber, newOccupancy) => {
               )}
 
               {activeScreen === "saved" && (
-                <SavedRoutesScreen
-                  savedRoutes={savedRoutes}
-                  onBack={() => setActiveScreen("home")}
-                  onRemove={(route) =>
-                    setSavedRoutes((prev) =>
-                      prev.filter(
-                        (item) =>
-                          item.from !== route.from || item.to !== route.to
-                      )
-                    )
-                  }
-                  onSelect={() => setActiveScreen("search")}
-                  onTrack={trackSavedTrip}
-                />
-              )}
+  <SavedRoutesScreen
+    savedRoutes={savedTrips}
+    onBack={() => setActiveScreen("home")}
+    onRemove={(trip) => removeSavedTrip(trip.id)}
+    onSelect={(trip) => {
+      setSearchFrom(trip.from);
+      setSearchTo(trip.to);
+      searchRealRoutes(trip.from, trip.to);
+      setActiveScreen("search");
+    }}
+    onTrack={trackSavedTrip}
+  />
+)}
 
               {activeScreen === "details" && selectedBus && (
                 <BusDetailsScreen
@@ -1237,39 +1235,6 @@ function HomeScreen({ buses, onSearch, lastSynced, onNearby, onSaved, from, to, 
           </div>
           <span>Saved</span>
         </button>
-
-      </section>
-
-
-      <section className="section">
-
-        <div className="section-heading">
-
-          <div>
-            <span className="eyebrow">
-              SMART ROUTES
-            </span>
-
-            <h2>Best buses for you</h2>
-          </div>
-
-          <button className="see-all">
-            See all
-          </button>
-
-        </div>
-
-
-        <div className="bus-list">
-
-          {buses.map((bus) => (
-            <BusCard
-              key={bus.number}
-              bus={bus}
-            />
-          ))}
-
-        </div>
 
       </section>
 
@@ -2013,7 +1978,7 @@ function NotificationsScreen({ buses, arrivalAlert, arrivalAlertHistory, onDismi
     {
       icon: <Users size={19} />,
       title: "Crowding update",
-      message: `BUSNETT estimates ${buses[1]?.number || "500D"} at ${buses[1]?.occupancy ?? "--"}% occupancy.`,
+      message: `BUSNETT estimates ${buses[1]?.number || "226-Q"} at ${buses[1]?.occupancy ?? "--"}% occupancy.`,
       time: "2 min ago",
       unread: true,
     },

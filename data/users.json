@@ -1,0 +1,20 @@
+[
+  {
+    "id": "cbf6526c-5acd-4203-af8a-91b8dbd03e7b",
+    "name": "Yuktha Kiran V",
+    "email": "yukthakiranv@gmail.com",
+    "passwordHash": "80174964d369dc4debc5f9b08ae265b6b1cf8e75554709ce64b57f66532cc41a9faf7058ba045fd51820f62afac1804fbedc05de0a282a81ec5c898474acbaeb",
+    "passwordSalt": "0ae56bfe547d3c9d400fcf4e3419ad2a",
+    "trips": [
+      {
+        "id": "356aa55e-3a46-47a2-9f6a-d95cc2158d61",
+        "from": "Kengeri",
+        "to": "Hebbala",
+        "busNumber": "501-CH",
+        "routeId": "3246",
+        "savedAt": "2026-09-08T05:47:52.315Z"
+      }
+    ],
+    "createdAt": "2026-09-08T05:47:37.523Z"
+  }
+]
