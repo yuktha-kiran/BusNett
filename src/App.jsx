@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from "react-leaflet";
 import L from "leaflet";
 import busnettLogo from "./assets/busnett-logo.png";
+import busnettBusCloud from "./assets/busnett-bus-cloud-v2.png";
 import "leaflet/dist/leaflet.css";
 import {
   BusFront,
@@ -93,35 +94,8 @@ function getFareForDistance(distanceKm) {
 }
 
 
-const buses = [
-  {
-    number: "O EXP-226N",
-    destination: "Majestic",
-    eta: "4 min",
-    occupancy: 32,
-    duration: "28 min",
-    fare: "Distance based",
-    recommended: true,
-  },
-  {
-    number: "226-Q",
-    destination: "Majestic",
-    eta: "7 min",
-    occupancy: 68,
-    duration: "24 min",
-    fare: "Distance based",
-    recommended: false,
-  },
-  {
-    number: "227-VB",
-    destination: "Shivajinagar",
-    eta: "11 min",
-    occupancy: 48,
-    duration: "31 min",
-    fare: "Distance based",
-    recommended: false,
-  },
-];
+const buses = [];
+
 function getSmartRecommendation(buses) {
   if (!buses || buses.length === 0) return null;
 
@@ -171,6 +145,7 @@ const [busOccupancies, setBusOccupancies] = useState({
   "226-Q": 41,
   "227-VB": 29,
 });
+  const [liveCloudBuses, setLiveCloudBuses] = useState([]);
   const [cloudOccupancies, setCloudOccupancies] = useState({
     "O EXP-226N": 32,
     "226-Q": 41,
@@ -185,7 +160,8 @@ const [busOccupancies, setBusOccupancies] = useState({
   });
   const [arrivalAlert, setArrivalAlert] = useState(null);
   const [arrivalAlertHistory, setArrivalAlertHistory] = useState([]);
-  const alertedBusesRef = useRef(new Set());
+  const [busAlert, setBusAlert] = useState(null);
+  const busAlertTriggeredRef = useRef(false);
 
   // Optional account feature. Core BUSNETT features work without login.
   const [authMode, setAuthMode] = useState(null);
@@ -375,6 +351,7 @@ const [busOccupancies, setBusOccupancies] = useState({
         const data = await response.json();
 
         if (data.success && Array.isArray(data.buses)) {
+          setLiveCloudBuses(data.buses);
           const occupancyData = {};
 
           data.buses.forEach((bus) => {
@@ -398,40 +375,58 @@ const [busOccupancies, setBusOccupancies] = useState({
   }, []);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setLiveEtas((previous) => {
-        const next = { ...previous };
+    if (!busAlert?.active || !busAlert?.busNumber) return;
 
-        Object.keys(next).forEach((busNumber) => {
-          if (next[busNumber] > 0) next[busNumber] -= 1;
-        });
+    const checkBusArrival = async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/buses`);
+        if (!response.ok) return;
 
-        const arrivingBus = buses.find(
-          (bus) => next[bus.number] === 1 && !alertedBusesRef.current.has(bus.number)
+        const data = await response.json();
+        const liveBus = (data.buses || []).find(
+          (bus) =>
+            String(bus.bus).toUpperCase() ===
+            String(busAlert.busNumber).toUpperCase()
         );
 
-        if (arrivingBus) {
-          alertedBusesRef.current.add(arrivingBus.number);
+        if (!liveBus) return;
+
+        const eta = Number(liveBus.eta);
+        if (
+          Number.isFinite(eta) &&
+          eta <= busAlert.threshold &&
+          !busAlertTriggeredRef.current
+        ) {
+          busAlertTriggeredRef.current = true;
+
           const alert = {
-            id: `${arrivingBus.number}-${Date.now()}`,
-            bus: arrivingBus.number,
-            from: searchFrom,
-            message: `${arrivingBus.number} is about to arrive at ${searchFrom}.`,
+            id: `${liveBus.bus}-${Date.now()}`,
+            bus: liveBus.bus,
+            from: busAlert.stop,
+            message: `${liveBus.bus} is about to arrive at ${busAlert.stop}.`,
             time: "Just now",
           };
+
           setArrivalAlert(alert);
           setArrivalAlertHistory((previousHistory) => [
             alert,
             ...previousHistory,
           ].slice(0, 5));
-        }
 
-        return next;
-      });
-    }, 60000);
+          setBusAlert((previous) =>
+            previous ? { ...previous, active: false } : previous
+          );
+        }
+      } catch (error) {
+        console.error("BUSNETT arrival alert check failed:", error);
+      }
+    };
+
+    checkBusArrival();
+    const interval = setInterval(checkBusArrival, 7000);
 
     return () => clearInterval(interval);
-  }, [searchFrom]);
+  }, [busAlert]);
 
   const loadSavedTrips = async (account = userAccount) => {
     if (!account?.token) {
@@ -515,6 +510,23 @@ const [busOccupancies, setBusOccupancies] = useState({
   const requireAccount = () => {
     setAuthError("");
     setAuthMode("signup");
+  };
+
+  const setArrivalReminder = (bus, minutesBefore = 2) => {
+    const stop = bus.origin || searchFrom || "your stop";
+    busAlertTriggeredRef.current = false;
+    setBusAlert({
+      busNumber: bus.number,
+      stop,
+      threshold: minutesBefore,
+      active: true,
+    });
+    setArrivalAlert(null);
+  };
+
+  const cancelArrivalReminder = () => {
+    busAlertTriggeredRef.current = false;
+    setBusAlert(null);
   };
 
   const saveCurrentTrip = async (bus) => {
@@ -629,18 +641,33 @@ const updateOccupancy = (busNumber, newOccupancy) => {
         : prev
     );
   };
-  const liveBuses = buses.map((bus) => ({
-    ...bus,
-    occupancy: busOccupancies[bus.number],
+  const liveBuses = liveCloudBuses.map((bus) => ({
+    number: bus.bus,
+    destination: bus.headsign || bus.nextStop || "Destination",
+    origin: bus.currentStop || bus.route?.split("→")[0]?.trim() || "Your stop",
+    eta: `${bus.eta ?? 0} min`,
+    occupancy: bus.occupancyPercent ?? bus.occupancy ?? 0,
+    duration: "Live",
+    fare: "Distance based",
+    routeId: bus.routeId || "",
+    routeStops: bus.routeStops || [],
+    dataSource: bus.dataSource || "BUSNETT Cloud",
+    occupancySource: bus.occupancySource || "SmartOccupancy",
+    latitude: bus.latitude,
+    longitude: bus.longitude,
+    speedKmh: bus.speedKmh,
   }));
 
   const smartRecommendation = getSmartRecommendation(liveBuses);
   const displayBuses = liveBuses.map((bus) => ({
     ...bus,
-    eta: `${liveEtas[bus.number] ?? parseInt(bus.eta) ?? 0} min`,
-    recommended:
-      smartRecommendation?.bus?.number === bus.number,
+    recommended: smartRecommendation?.bus?.number === bus.number,
   }));
+
+  if (window.location.pathname === "/ticketing") {
+    return <TicketingPortal />;
+  }
+
   return (
     <div className="app">
       <div className="phone-shell">
@@ -951,6 +978,9 @@ const updateOccupancy = (busNumber, newOccupancy) => {
                   userAccount={userAccount}
                   onSaveTrip={saveCurrentTrip}
                   onRequireAuth={requireAccount}
+                  busAlert={busAlert}
+                  onSetArrivalAlert={setArrivalReminder}
+                  onCancelArrivalAlert={cancelArrivalReminder}
                 />
               )}
 
@@ -1247,7 +1277,7 @@ function HomeScreen({ buses, onSearch, lastSynced, onNearby, onSaved, from, to, 
         }}
       >
         <img
-          src="/busnett-bus-cloud.png"
+          src={busnettBusCloud}
           alt="BUSNETT bus approaching a stop"
           style={{
             display: "block",
@@ -2283,7 +2313,7 @@ function SearchScreen({
    BUS DETAILS
 ========================= */
 
-function BusDetailsScreen({ bus, onBack, onTrack, userAccount, onSaveTrip, onRequireAuth }) {
+function BusDetailsScreen({ bus, onBack, onTrack, userAccount, onSaveTrip, onRequireAuth, busAlert, onSetArrivalAlert, onCancelArrivalAlert }) {
 
   const forecast = [
     {
@@ -2608,6 +2638,88 @@ function BusDetailsScreen({ bus, onBack, onTrack, userAccount, onSaveTrip, onReq
         <Navigation size={18} />
         Track this bus live
       </button>
+
+      <section
+        style={{
+          background: busAlert?.active ? "#e8f7f0" : "#f8fafc",
+          border: busAlert?.active ? "1px solid #b7ead1" : "1px solid #e2e8f0",
+          borderRadius: "14px",
+          padding: "12px 13px",
+          marginTop: "10px",
+          marginBottom: "10px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <div
+            style={{
+              width: "34px",
+              height: "34px",
+              borderRadius: "10px",
+              background: busAlert?.active ? "#ffffff" : "#e8f7f0",
+              color: "#16865b",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            <Bell size={17} />
+          </div>
+
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <strong style={{ display: "block", fontSize: "12px", color: "#0f172a" }}>
+              {busAlert?.active ? "Arrival alert set" : "Get an arrival alert"}
+            </strong>
+            <span style={{ display: "block", marginTop: "3px", fontSize: "11px", color: "#64748b" }}>
+              {busAlert?.active
+                ? `We will alert you when ${bus.number} is about ${busAlert.threshold} min from ${busAlert.stop}.`
+                : `Choose how early you want an alert before ${bus.number} reaches your stop.`}
+            </span>
+          </div>
+        </div>
+
+        {!busAlert?.active ? (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "7px", marginTop: "10px" }}>
+            {[1, 2, 5].map((minutes) => (
+              <button
+                key={minutes}
+                type="button"
+                onClick={() => onSetArrivalAlert(bus, minutes)}
+                style={{
+                  border: "1px solid #b7ead1",
+                  borderRadius: "9px",
+                  padding: "8px 6px",
+                  background: "#ffffff",
+                  color: "#16865b",
+                  fontSize: "10px",
+                  fontWeight: "800",
+                  cursor: "pointer",
+                }}
+              >
+                {minutes} min before
+              </button>
+            ))}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={onCancelArrivalAlert}
+            style={{
+              marginTop: "10px",
+              border: "1px solid #dbe3ea",
+              borderRadius: "9px",
+              padding: "8px 11px",
+              background: "#ffffff",
+              color: "#0f172a",
+              fontSize: "10px",
+              fontWeight: "800",
+              cursor: "pointer",
+            }}
+          >
+            Cancel alert
+          </button>
+        )}
+      </section>
 
       <button
         onClick={() => {
@@ -3404,6 +3516,430 @@ function ProfileScreen({
   );
 }
 
+
+function TicketingPortal() {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [token, setToken] = useState("");
+  const [buses, setBuses] = useState([]);
+  const [routeOptions, setRouteOptions] = useState([]);
+  const [selectedBus, setSelectedBus] = useState("");
+  const [routeStops, setRouteStops] = useState([]);
+  const [fromStop, setFromStop] = useState("");
+  const [toStop, setToStop] = useState("");
+  const [passengers, setPassengers] = useState(1);
+  const [events, setEvents] = useState([]);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [loggedIn, setLoggedIn] = useState(false);
+
+  const loadLiveBuses = async (authToken = token) => {
+    if (!authToken) return;
+    try {
+      const response = await fetch(`${API_URL}/api/buses`);
+      if (!response.ok) throw new Error("Unable to load live buses.");
+      const data = await response.json();
+      setBuses(Array.isArray(data.buses) ? data.buses : []);
+    } catch (err) {
+      setError(err.message || "Live bus data unavailable.");
+    }
+  };
+
+  const loadRouteOptions = async (authToken = token, query = "") => {
+    if (!authToken) return;
+    try {
+      const response = await fetch(
+        `${API_URL}/api/ticketing/routes?q=${encodeURIComponent(query)}`,
+        { headers: { Authorization: `Bearer ${authToken}` } }
+      );
+      if (!response.ok) throw new Error("Unable to load BMTC routes.");
+      const data = await response.json();
+      setRouteOptions(Array.isArray(data.routes) ? data.routes : []);
+    } catch (err) {
+      setError(err.message || "BMTC route data unavailable.");
+    }
+  };
+
+
+  const loadRouteStops = async (routeNumber, authToken = token) => {
+    if (!authToken || !routeNumber.trim()) {
+      setRouteStops([]);
+      setFromStop("");
+      setToStop("");
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${API_URL}/api/ticketing/stops?route=${encodeURIComponent(routeNumber.trim())}`,
+        { headers: { Authorization: `Bearer ${authToken}` } }
+      );
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Unable to load route stops.");
+      }
+
+      const stops = Array.isArray(data.stops) ? data.stops : [];
+      setRouteStops(stops);
+      setFromStop(stops[0]?.name || "");
+      setToStop(stops[1]?.name || "");
+    } catch (err) {
+      setRouteStops([]);
+      setFromStop("");
+      setToStop("");
+      setError(err.message || "BMTC route stops unavailable.");
+    }
+  };
+
+  useEffect(() => {
+    if (!loggedIn || !token) return;
+
+    loadLiveBuses(token);
+    loadRouteOptions(token);
+
+    const interval = setInterval(() => loadLiveBuses(token), 5000);
+    return () => clearInterval(interval);
+  }, [loggedIn, token]);
+
+  const login = async (event) => {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${API_URL}/api/auth/ticketing/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Invalid ticketing credentials.");
+      }
+
+      setToken(data.user.token);
+      setLoggedIn(true);
+      setMessage("Ticketing mode active.");
+      await loadRouteOptions(data.user.token);
+      await loadLiveBuses(data.user.token);
+    } catch (err) {
+      setError(err.message || "Unable to sign in.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const issueTicket = async () => {
+    if (!token || !selectedBus || !fromStop.trim() || !toStop.trim()) {
+      setError("Enter a dataset route, boarding stop and destination.");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const response = await fetch(`${API_URL}/api/ticketing/events`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          busNumber: selectedBus.trim(),
+          passengers,
+          from: fromStop.trim(),
+          to: toStop.trim(),
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Unable to issue ticket.");
+      }
+
+      setMessage(
+        `Ticket issued: ${passengers} passenger${passengers === 1 ? "" : "s"} · ${data.event?.totalFare ? `₹${data.event.totalFare} total` : "fare calculated"}.`
+      );
+      setEvents(data.recentEvents || []);
+      await loadLiveBuses(token);
+    } catch (err) {
+      setError(err.message || "Unable to issue ticket.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!loggedIn) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "#f6faf8",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "20px",
+          boxSizing: "border-box",
+        }}
+      >
+        <form
+          onSubmit={login}
+          style={{
+            width: "100%",
+            maxWidth: "390px",
+            background: "#ffffff",
+            border: "1px solid #dbe3ea",
+            borderRadius: "22px",
+            padding: "22px",
+            boxSizing: "border-box",
+            boxShadow: "0 18px 45px rgba(15,23,42,0.10)",
+          }}
+        >
+          <span style={{ display: "block", color: "#16865b", fontSize: "10px", fontWeight: "900", letterSpacing: "1px" }}>
+            PRIVATE ACCESS
+          </span>
+          <h2 style={{ margin: "6px 0 5px", color: "#0f172a" }}>BUSNETT Ticketing</h2>
+          <p style={{ margin: "0 0 18px", color: "#64748b", fontSize: "12px", lineHeight: 1.5 }}>
+            Staff-only portal for entering passenger-flow events.
+          </p>
+
+          <label style={{ display: "block", fontSize: "10px", fontWeight: "800", color: "#64748b", marginBottom: "10px" }}>
+            USERNAME
+            <input
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              autoComplete="username"
+              style={{ display: "block", width: "100%", boxSizing: "border-box", marginTop: "5px", padding: "11px", border: "1px solid #dbe3ea", borderRadius: "10px", color: "#0f172a" }}
+            />
+          </label>
+
+          <label style={{ display: "block", fontSize: "10px", fontWeight: "800", color: "#64748b" }}>
+            PASSWORD
+            <input
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              type="password"
+              autoComplete="current-password"
+              style={{ display: "block", width: "100%", boxSizing: "border-box", marginTop: "5px", padding: "11px", border: "1px solid #dbe3ea", borderRadius: "10px", color: "#0f172a" }}
+            />
+          </label>
+
+          {error && <div style={{ marginTop: "12px", background: "#fff0f0", color: "#b91c1c", borderRadius: "10px", padding: "9px", fontSize: "11px", fontWeight: "700" }}>{error}</div>}
+
+          <button
+            type="submit"
+            disabled={loading}
+            style={{ width: "100%", marginTop: "14px", border: "none", borderRadius: "11px", padding: "12px", background: "#16865b", color: "#ffffff", fontWeight: "800", fontSize: "12px", cursor: loading ? "wait" : "pointer" }}
+          >
+            {loading ? "Signing in..." : "Enter Ticketing Mode"}
+          </button>
+
+          <p style={{ margin: "13px 0 0", fontSize: "10px", color: "#94a3b8", textAlign: "center" }}>
+            Private staff portal · not part of the passenger app
+          </p>
+        </form>
+      </div>
+    );
+  }
+
+  const activeBus = buses.find((bus) => String(bus.bus).toUpperCase() === selectedBus.trim().toUpperCase());
+  const occupancy = activeBus?.occupancyPercent ?? 0;
+  const capacity = activeBus?.capacity ?? 60;
+
+  const occupancyLabel =
+    occupancy > 100 ? "OVERCAPACITY" : occupancy >= 90 ? "NEAR CAPACITY" : occupancy >= 75 ? "HIGH" : occupancy >= 60 ? "MODERATE" : "LOW";
+
+  const occupancyTone =
+    occupancy > 100 ? "#b91c1c" : occupancy >= 90 ? "#c24141" : occupancy >= 75 ? "#c76b24" : occupancy >= 60 ? "#b7791f" : "#16865b";
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#f6faf8", padding: "18px", boxSizing: "border-box" }}>
+      <div style={{ maxWidth: "900px", margin: "0 auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+          <div>
+            <span style={{ color: "#16865b", fontSize: "10px", fontWeight: "900", letterSpacing: "1px" }}>BUSNETT INTERNAL</span>
+            <h1 style={{ margin: "4px 0 0", fontSize: "24px", color: "#0f172a" }}>Ticketing Mode</h1>
+          </div>
+          <button
+            onClick={() => {
+              setLoggedIn(false);
+              setToken("");
+              window.location.href = "/";
+            }}
+            style={{ border: "1px solid #dbe3ea", background: "#ffffff", color: "#475569", borderRadius: "10px", padding: "9px 12px", fontSize: "10px", fontWeight: "800", cursor: "pointer" }}
+          >
+            Exit
+          </button>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: "12px" }}>
+          <section style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "18px", padding: "15px" }}>
+            <span className="eyebrow">TICKET EVENT</span>
+            <h3 style={{ margin: "4px 0 12px", color: "#0f172a" }}>Passenger entry</h3>
+
+            <label style={{ display: "block", fontSize: "10px", fontWeight: "800", color: "#64748b", marginBottom: "9px" }}>
+              BUS
+              <input
+                list="bus-route-options"
+                value={selectedBus}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setSelectedBus(value);
+                  setError("");
+                  setMessage("");
+                  loadRouteOptions(token, value);
+
+                  const exact = routeOptions.find(
+                    (route) =>
+                      String(route.routeNumber).toUpperCase() ===
+                      value.trim().toUpperCase()
+                  );
+
+                  if (exact) {
+                    loadRouteStops(exact.routeNumber, token);
+                  } else {
+                    loadRouteStops(value, token);
+                  }
+                }}
+                placeholder="Enter BMTC route number"
+                style={{ display: "block", width: "100%", boxSizing: "border-box", marginTop: "5px", padding: "10px", border: "1px solid #dbe3ea", borderRadius: "10px", background: "#ffffff", color: "#0f172a", fontWeight: "700" }}
+              />
+              <datalist id="bus-route-options">
+                {routeOptions.map((route) => (
+                  <option key={route.routeNumber} value={route.routeNumber}>{route.routeName}</option>
+                ))}
+              </datalist>
+              <span style={{ display: "block", marginTop: "4px", fontSize: "9px", color: "#94a3b8" }}>
+                Route number is validated against the BMTC dataset.
+              </span>
+            </label>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+              <label style={{ display: "block", fontSize: "10px", fontWeight: "800", color: "#64748b" }}>
+                FROM
+                <select
+                  value={fromStop}
+                  onChange={(event) => setFromStop(event.target.value)}
+                  disabled={!routeStops.length}
+                  style={{ display: "block", width: "100%", boxSizing: "border-box", marginTop: "5px", padding: "10px", border: "1px solid #dbe3ea", borderRadius: "10px", background: "#ffffff", color: "#0f172a" }}
+                >
+                  <option value="">Select boarding station</option>
+                  {routeStops.map((stop) => (
+                    <option key={`from-${stop.id}`} value={stop.name}>{stop.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: "block", fontSize: "10px", fontWeight: "800", color: "#64748b" }}>
+                TO
+                <select
+                  value={toStop}
+                  onChange={(event) => setToStop(event.target.value)}
+                  disabled={!routeStops.length}
+                  style={{ display: "block", width: "100%", boxSizing: "border-box", marginTop: "5px", padding: "10px", border: "1px solid #dbe3ea", borderRadius: "10px", background: "#ffffff", color: "#0f172a" }}
+                >
+                  <option value="">Select destination station</option>
+                  {routeStops.map((stop) => (
+                    <option key={`to-${stop.id}`} value={stop.name}>{stop.name}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <span style={{ display: "block", marginTop: "6px", fontSize: "9px", color: "#94a3b8" }}>
+              Stations are loaded from the selected BMTC route in the dataset.
+            </span>
+
+            {fromStop && toStop && (
+              (() => {
+                const from = routeStops.find((stop) => stop.name === fromStop);
+                const to = routeStops.find((stop) => stop.name === toStop);
+                const distance = from && to ? calculateDistanceKm(from, to) : 0;
+                const farePerPassenger = getFareForDistance(distance);
+                const fareValue = parseInt(String(farePerPassenger).replace(/[^0-9]/g, ""), 10) || 0;
+                return (
+                  <div style={{ marginTop: "9px", background: "#e8f7f0", borderRadius: "10px", padding: "9px 10px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", fontSize: "10px" }}>
+                      <span style={{ color: "#64748b", fontWeight: "700" }}>Distance-based fare</span>
+                      <strong style={{ color: "#16865b" }}>{fareValue ? `₹${fareValue}` : "Fare unavailable"} / passenger</strong>
+                    </div>
+                    <div style={{ marginTop: "3px", fontSize: "9px", color: "#64748b" }}>
+                      Total for {passengers} passenger{passengers === 1 ? "" : "s"}: <strong style={{ color: "#0f172a" }}>{fareValue ? `₹${fareValue * passengers}` : "--"}</strong>
+                    </div>
+                  </div>
+                );
+              })()
+            )}
+
+            <label style={{ display: "block", marginTop: "9px", fontSize: "10px", fontWeight: "800", color: "#64748b" }}>
+              PASSENGERS
+              <input type="number" min="1" max="20" value={passengers} onChange={(event) => setPassengers(Math.max(1, Math.min(20, Number(event.target.value) || 1)))} style={{ display: "block", width: "100%", boxSizing: "border-box", marginTop: "5px", padding: "10px", border: "1px solid #dbe3ea", borderRadius: "10px", fontWeight: "800" }} />
+            </label>
+
+            <button onClick={issueTicket} disabled={loading || !selectedBus.trim()} style={{ width: "100%", marginTop: "11px", border: "none", borderRadius: "10px", padding: "11px", background: "#16865b", color: "#ffffff", fontWeight: "800", fontSize: "11px", cursor: "pointer" }}>
+              {loading ? "Processing..." : "Issue ticket"}
+            </button>
+
+            {message && <div style={{ marginTop: "10px", background: "#e8f7f0", color: "#16865b", borderRadius: "10px", padding: "9px", fontSize: "10px", fontWeight: "800" }}>{message}</div>}
+            {error && <div style={{ marginTop: "10px", background: "#fff0f0", color: "#b91c1c", borderRadius: "10px", padding: "9px", fontSize: "10px", fontWeight: "800" }}>{error}</div>}
+          </section>
+
+          <section style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "18px", padding: "15px" }}>
+            <span className="eyebrow">LIVE BUS STATE</span>
+            <h3 style={{ margin: "4px 0 2px", color: "#0f172a" }}>{selectedBus || "Enter a route"}</h3>
+            <span style={{ fontSize: "11px", color: "#64748b" }}>Updates from the shared BUSNETT cloud state</span>
+
+            <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginTop: "16px" }}>
+              <div>
+                <strong style={{ fontSize: "27px", color: occupancyTone }}>{activeBus?.occupancy ?? 0} / {capacity}</strong>
+                <span style={{ display: "block", fontSize: "11px", color: "#64748b" }}>passengers</span>
+              </div>
+              <strong style={{ fontSize: "27px", color: occupancyTone }}>{Math.round(occupancy)}%</strong>
+            </div>
+
+            <div style={{ marginTop: "11px", height: "15px", background: "#eef2f6", borderRadius: "999px", overflow: "hidden" }}>
+              <div style={{ width: `${Math.min(100, Math.max(0, occupancy))}%`, height: "100%", background: occupancyTone, transition: "width 400ms ease" }} />
+            </div>
+
+            <div style={{ marginTop: "9px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: "10px", fontWeight: "800", color: occupancyTone }}>{occupancyLabel}</span>
+              <span style={{ fontSize: "10px", color: "#64748b" }}>ETA {activeBus?.eta ?? "--"} min</span>
+            </div>
+          </section>
+        </div>
+
+        <section style={{ marginTop: "12px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "18px", padding: "15px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <span className="eyebrow">RECENT EVENTS</span>
+              <h3 style={{ margin: "4px 0 0", color: "#0f172a" }}>Ticketing activity</h3>
+            </div>
+            <span style={{ fontSize: "10px", color: "#64748b" }}>Shared with passenger app</span>
+          </div>
+
+          <div style={{ marginTop: "9px" }}>
+            {events.length === 0 ? (
+              <p style={{ margin: 0, color: "#64748b", fontSize: "11px" }}>No ticket events yet.</p>
+            ) : events.map((event) => (
+              <div key={event.id} style={{ padding: "9px 0", borderTop: "1px solid #f1f5f9" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
+                  <strong style={{ fontSize: "11px", color: "#0f172a" }}>{event.busNumber}</strong>
+                  <span style={{ fontSize: "9px", color: "#94a3b8" }}>{new Date(event.timestamp).toLocaleTimeString()}</span>
+                </div>
+                <span style={{ fontSize: "10px", color: event.status === "overcapacity" ? "#b91c1c" : "#16865b", fontWeight: "800" }}>
+                  +{event.passengers} · {event.from || "Stop"} → {event.to || "Destination"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
 
 function AuthScreen({
   mode,

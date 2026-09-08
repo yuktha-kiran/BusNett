@@ -20,6 +20,14 @@ const STOP_TIMES_FILE = path.join(GTFS_DIR, "stop_times.txt");
 const USERS_FILE = path.join(__dirname, "..", "data", "users.json");
 const sessions = new Map();
 
+// Demo-only staff credentials for the private ticketing portal.
+// Change these values before any real deployment.
+const TICKETING_USERNAME = process.env.BUSNETT_TICKETING_USERNAME || "ticketer";
+const TICKETING_PASSWORD = process.env.BUSNETT_TICKETING_PASSWORD || "busnett123";
+const TICKETING_USER_ID = "busnett-ticketing-staff";
+
+const ticketingEvents = [];
+
 function loadUsers() {
   try {
     if (!fs.existsSync(USERS_FILE)) {
@@ -59,6 +67,7 @@ function publicUser(user, token) {
     id: user.id,
     name: user.name,
     email: user.email,
+    role: user.role || "passenger",
     token,
   };
 }
@@ -70,6 +79,15 @@ function getAuthenticatedUser(req) {
   const token = header.slice(7);
   const userId = sessions.get(token);
   if (!userId) return null;
+
+  if (userId === TICKETING_USER_ID) {
+    return {
+      id: TICKETING_USER_ID,
+      name: "BUSNETT Ticketer",
+      email: "ticketing@busnett.local",
+      role: "ticketing",
+    };
+  }
 
   return users.find((user) => user.id === userId) || null;
 }
@@ -964,33 +982,10 @@ function findDirectRoutes(
     - Occupancy follows: O_new = O_previous - Alighting + Boarding.
 */
 
-const DEMO_BUS_CONFIG = {
-  "O EXP-226N": {
-    capacity: 60,
-    speedKmh: 24,
-    startOccupancy: 32,
-    from: "Kengeri",
-    to: "Majestic",
-  },
-
-  "226-Q": {
-    capacity: 60,
-    speedKmh: 22,
-    startOccupancy: 41,
-    from: "Kengeri",
-    to: "Majestic",
-  },
-
-  "221-G": {
-    capacity: 60,
-    speedKmh: 25,
-    startOccupancy: 29,
-    from: "Kengeri",
-    to: "Majestic",
-  },
-};
-
+// Dataset-backed live bus state. A bus is activated when a ticketing
+// staff member enters a valid BMTC route number and issues a ticket.
 const simulatedBuses = new Map();
+
 
 function distanceKm(a, b) {
   if (!a || !b) return 0;
@@ -1011,97 +1006,181 @@ function findDemoRoute(routeNumber, from, to) {
   return matches[0] || null;
 }
 
-function createTicketSimulation(bus, routeStops) {
-  // Deterministic ticket set for the prototype. No passenger identity is stored.
-  const tickets = [];
-  const start = Math.min(3, Math.max(1, routeStops.length - 1));
+function findRouteStopIndex(routeStops, query) {
+  const cleaned = normalize(query);
+  if (!cleaned) return -1;
 
-  for (let i = 0; i < 18; i++) {
-    const boardingIndex = Math.min(start, Math.floor(i / 6));
-    const destinationIndex = Math.min(
-      routeStops.length - 1,
-      boardingIndex + 2 + (i % Math.max(1, routeStops.length - boardingIndex - 1))
-    );
-    if (destinationIndex <= boardingIndex) continue;
+  const exact = routeStops.findIndex((stop) => normalize(stop.name) === cleaned);
+  if (exact >= 0) return exact;
 
-    tickets.push({
-      id: `${bus}-T${i + 1}`,
-      boardingStopIndex: boardingIndex,
-      destinationStopIndex: destinationIndex,
-    });
-  }
-
-  return tickets;
+  return routeStops.findIndex((stop) => normalize(stop.name).includes(cleaned));
 }
 
-function initializeDemoBuses() {
-  if (!gtfsReady) return;
+function findDatasetRouteForTicket(busNumber, from, to) {
+  if (!gtfsReady) return null;
 
-  for (const [routeNumber, config] of Object.entries(DEMO_BUS_CONFIG)) {
-    const route = findDemoRoute(routeNumber, config.from, config.to);
-    if (!route || !Array.isArray(route.stops) || route.stops.length < 2) {
-      console.log(`Demo route ${routeNumber} could not be initialized from GTFS.`);
-      continue;
+  const matches = findDirectRoutes(from, to).filter(
+    (route) =>
+      String(route.routeNumber).toUpperCase() === String(busNumber).toUpperCase()
+  );
+
+  return matches[0] || null;
+}
+
+function findDatasetRouteStops(routeNumber) {
+  if (!gtfsReady) return [];
+
+  const routeIdSet = new Set();
+  for (const route of routes.values()) {
+    if (String(route.shortName).toUpperCase() === String(routeNumber).toUpperCase()) {
+      routeIdSet.add(route.id);
     }
-
-    const now = Date.now();
-    simulatedBuses.set(routeNumber, {
-      routeNumber,
-      routeId: route.routeId,
-      headsign: route.headsign,
-      routeName: route.routeName,
-      stops: route.stops,
-      capacity: config.capacity,
-      speedKmh: config.speedKmh,
-      from: config.from,
-      to: config.to,
-      segmentIndex: 0,
-      segmentProgress: 0.18,
-      lastUpdate: now,
-      lastProcessedStop: -1,
-      occupancy: config.startOccupancy,
-      tickets: createTicketSimulation(routeNumber, route.stops),
-      startedAt: now,
-    });
   }
 
-  console.log(`Live bus simulator initialized for ${simulatedBuses.size} demo buses.`);
+  const ordered = new Map();
+  for (const pattern of patterns.values()) {
+    if (!routeIdSet.has(pattern.routeId)) continue;
+    for (const item of getOrderedPatternStops(pattern)) {
+      const stop = stops.get(item.stopId);
+      if (!stop || ordered.has(stop.id)) continue;
+      ordered.set(stop.id, { ...stop, sequence: item.sequence });
+    }
+  }
+
+  return Array.from(ordered.values()).sort((a, b) => a.sequence - b.sequence);
+}
+
+function calculateTicketDistanceKm(fromStop, toStop) {
+  if (!fromStop || !toStop) return 0;
+  const lat1 = Number(fromStop.lat) * Math.PI / 180;
+  const lat2 = Number(toStop.lat) * Math.PI / 180;
+  const dLat = (Number(toStop.lat) - Number(fromStop.lat)) * Math.PI / 180;
+  const dLng = (Number(toStop.lng) - Number(fromStop.lng)) * Math.PI / 180;
+  const h = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function getTicketFareForDistance(distanceKm) {
+  if (distanceKm <= 0) return 0;
+  if (distanceKm <= 2) return 6;
+  if (distanceKm <= 4) return 12;
+  if (distanceKm <= 6) return 18;
+  if (distanceKm <= 8) return 23;
+  if (distanceKm <= 10) return 25;
+  if (distanceKm <= 15) return 26;
+  if (distanceKm <= 20) return 28;
+  if (distanceKm >= 40) return 32;
+  return 28;
+}
+
+function ensureTicketingBus(busNumber, from, to) {
+  const existing = simulatedBuses.get(busNumber);
+  if (existing) return existing;
+
+  const route = findDatasetRouteForTicket(busNumber, from, to);
+  if (!route || !Array.isArray(route.stops) || route.stops.length < 2) {
+    return null;
+  }
+
+  const boardingIndex = findRouteStopIndex(route.stops, from);
+  const destinationIndex = findRouteStopIndex(route.stops, to);
+
+  if (boardingIndex < 0 || destinationIndex <= boardingIndex) {
+    return null;
+  }
+
+  const now = Date.now();
+  const bus = {
+    routeNumber: route.routeNumber,
+    routeId: route.routeId,
+    headsign: route.headsign,
+    routeName: route.routeName,
+    stops: route.stops,
+    capacity: 60,
+    speedKmh: 24,
+    from: route.from?.name || from,
+    to: route.to?.name || to,
+    segmentIndex: boardingIndex,
+    segmentProgress: 0,
+    lastUpdate: now,
+    lastProcessedStop: boardingIndex - 1,
+    occupancy: 0,
+    passengerTickets: [],
+    createdFromTicketing: true,
+    startedAt: now,
+  };
+
+  simulatedBuses.set(busNumber, bus);
+  return bus;
 }
 
 function processStopTransactions(bus, stopIndex) {
-  const alighting = bus.tickets.filter(
-    (ticket) => ticket.destinationStopIndex === stopIndex
-  ).length;
+  let boarding = 0;
+  let alighting = 0;
+  const remainingTickets = [];
 
-  const boarding = 2 + ((stopIndex * 3 + bus.routeNumber.length) % 7);
-
-  bus.tickets = bus.tickets.filter(
-    (ticket) => ticket.destinationStopIndex !== stopIndex
-  );
-
-  bus.occupancy = Math.max(
-    0,
-    Math.min(bus.capacity, bus.occupancy - alighting + boarding)
-  );
-
-  // Add a new anonymized ticket batch for the next part of the route.
-  const maxDestination = bus.stops.length - 1;
-  for (let i = 0; i < boarding; i++) {
-    const destinationStopIndex = Math.min(
-      maxDestination,
-      stopIndex + 1 + ((i + stopIndex) % Math.max(1, maxDestination - stopIndex))
-    );
-
-    if (destinationStopIndex > stopIndex) {
-      bus.tickets.push({
-        id: `${bus.routeNumber}-${Date.now()}-${i}`,
-        boardingStopIndex: stopIndex,
-        destinationStopIndex,
-      });
+  for (const ticket of bus.passengerTickets || []) {
+    if (!ticket.boarded && ticket.boardingStopIndex === stopIndex) {
+      ticket.boarded = true;
+      boarding += ticket.passengers;
     }
+
+    if (ticket.boarded && ticket.destinationStopIndex === stopIndex) {
+      alighting += ticket.passengers;
+      continue;
+    }
+
+    remainingTickets.push(ticket);
   }
 
+  bus.passengerTickets = remainingTickets;
+  bus.occupancy = Math.max(
+    0,
+    Math.min(bus.capacity * 2, bus.occupancy - alighting + boarding)
+  );
+
   return { boarding, alighting };
+}
+
+function createTicketEvent(bus, from, to, passengers) {
+  const boardingIndex = findRouteStopIndex(bus.stops, from);
+  const destinationIndex = findRouteStopIndex(bus.stops, to);
+
+  if (boardingIndex < 0) {
+    throw new Error(`Boarding stop "${from}" is not on route ${bus.routeNumber}.`);
+  }
+
+  if (destinationIndex <= boardingIndex) {
+    throw new Error(`Destination must be after ${from} on route ${bus.routeNumber}.`);
+  }
+
+  if (boardingIndex < bus.segmentIndex) {
+    throw new Error(`The bus has already passed ${from}. Choose the current or a future stop.`);
+  }
+
+  const ticket = {
+    id: crypto.randomUUID(),
+    busNumber: bus.routeNumber,
+    boardingStop: bus.stops[boardingIndex].name,
+    destinationStop: bus.stops[destinationIndex].name,
+    boardingStopIndex: boardingIndex,
+    destinationStopIndex: destinationIndex,
+    passengers,
+    boarded: false,
+    source: "ticketing",
+    issuedAt: new Date().toISOString(),
+  };
+
+  bus.passengerTickets.push(ticket);
+
+  // Ticket is issued at the current station, so those passengers board now.
+  if (boardingIndex === bus.segmentIndex) {
+    processStopTransactions(bus, boardingIndex);
+    bus.lastProcessedStop = boardingIndex;
+  }
+
+  return ticket;
 }
 
 function updateSimulatedBus(bus) {
@@ -1269,6 +1348,50 @@ const server =
         url.pathname;
 
       // ----------------------------------------------
+      // PRIVATE TICKETING STAFF LOGIN
+      // ----------------------------------------------
+
+      if (
+        req.method === "POST" &&
+        pathname === "/api/auth/ticketing/login"
+      ) {
+        try {
+          const body = await readRequestBody(req);
+          const username = String(body.username || "").trim();
+          const password = String(body.password || "");
+
+          if (username !== TICKETING_USERNAME || password !== TICKETING_PASSWORD) {
+            sendJSON(res, 401, {
+              success: false,
+              message: "Invalid ticketing credentials.",
+            });
+            return;
+          }
+
+          const token = crypto.randomBytes(32).toString("hex");
+          sessions.set(token, TICKETING_USER_ID);
+
+          sendJSON(res, 200, {
+            success: true,
+            user: {
+              id: TICKETING_USER_ID,
+              name: "BUSNETT Ticketer",
+              username: TICKETING_USERNAME,
+              role: "ticketing",
+              token,
+            },
+          });
+          return;
+        } catch (error) {
+          sendJSON(res, 400, {
+            success: false,
+            message: error.message || "Unable to process ticketing login.",
+          });
+          return;
+        }
+      }
+
+      // ----------------------------------------------
       // OPTIONAL AUTHENTICATION
       // ----------------------------------------------
 
@@ -1324,6 +1447,7 @@ const server =
               email,
               passwordHash: hash,
               passwordSalt: salt,
+              role: "passenger",
               trips: [],
               createdAt: new Date().toISOString(),
             };
@@ -1373,6 +1497,219 @@ const server =
           });
           return;
         }
+      }
+
+      // ----------------------------------------------
+      // PRIVATE TICKETING ROUTE LOOKUP
+      // ----------------------------------------------
+
+      if (
+        pathname === "/api/ticketing/routes" &&
+        req.method === "GET"
+      ) {
+        const user = getAuthenticatedUser(req);
+
+        if (!user || user.role !== "ticketing") {
+          sendJSON(res, 403, {
+            success: false,
+            message: "Ticketing staff access is required.",
+          });
+          return;
+        }
+
+        const query = normalize(url.searchParams.get("q") || "");
+        const unique = new Set();
+        const result = [];
+
+        for (const route of routes.values()) {
+          const value = String(route.shortName || "").trim();
+          const cleaned = normalize(value);
+          if (!value || unique.has(cleaned)) continue;
+          if (query && !cleaned.includes(query)) continue;
+
+          unique.add(cleaned);
+          result.push({
+            routeNumber: value,
+            routeName: route.longName || "",
+          });
+
+          if (result.length >= 25) break;
+        }
+
+        result.sort((a, b) => a.routeNumber.localeCompare(b.routeNumber));
+
+        sendJSON(res, 200, {
+          success: true,
+          routes: result,
+        });
+        return;
+      }
+
+      // ----------------------------------------------
+      // PRIVATE TICKETING ROUTE STOPS
+      // ----------------------------------------------
+
+      if (
+        pathname === "/api/ticketing/stops" &&
+        req.method === "GET"
+      ) {
+        const user = getAuthenticatedUser(req);
+
+        if (!user || user.role !== "ticketing") {
+          sendJSON(res, 403, {
+            success: false,
+            message: "Ticketing staff access is required.",
+          });
+          return;
+        }
+
+        const routeNumber = String(url.searchParams.get("route") || "").trim();
+        if (!routeNumber) {
+          sendJSON(res, 400, {
+            success: false,
+            message: "Route number is required.",
+          });
+          return;
+        }
+
+        const routeStops = findDatasetRouteStops(routeNumber);
+        if (!routeStops.length) {
+          sendJSON(res, 404, {
+            success: false,
+            message: `Route ${routeNumber} was not found in the BMTC dataset.`,
+          });
+          return;
+        }
+
+        sendJSON(res, 200, {
+          success: true,
+          routeNumber,
+          stops: routeStops.map((stop) => ({
+            id: stop.id,
+            name: stop.name,
+            lat: stop.lat,
+            lng: stop.lng,
+          })),
+        });
+        return;
+      }
+
+      // ----------------------------------------------
+      // PRIVATE TICKETING EVENTS
+      // ----------------------------------------------
+
+      if (
+        pathname === "/api/ticketing/events" &&
+        req.method === "POST"
+      ) {
+        const user = getAuthenticatedUser(req);
+
+        if (!user || user.role !== "ticketing") {
+          sendJSON(res, 403, {
+            success: false,
+            message: "Ticketing staff access is required.",
+          });
+          return;
+        }
+
+        try {
+          const body = await readRequestBody(req);
+          const busNumber = String(body.busNumber || "").trim();
+          const passengers = Math.max(1, Math.min(20, Number(body.passengers) || 1));
+          const from = String(body.from || "").trim();
+          const to = String(body.to || "").trim();
+
+          if (!busNumber || !from || !to) {
+            sendJSON(res, 400, {
+              success: false,
+              message: "Bus, from and to are required.",
+            });
+            return;
+          }
+
+          // Do not trust an arbitrary bus number. It must exist in the BMTC dataset.
+          const datasetRoute = findDatasetRouteForTicket(busNumber, from, to);
+          if (!datasetRoute) {
+            sendJSON(res, 404, {
+              success: false,
+              message: `Route ${busNumber} with ${from} → ${to} was not found in the BMTC dataset.`,
+            });
+            return;
+          }
+
+          const bus = ensureTicketingBus(busNumber, from, to);
+          if (!bus) {
+            sendJSON(res, 400, {
+              success: false,
+              message: `Unable to initialize ${busNumber} from the BMTC route data.`,
+            });
+            return;
+          }
+
+          const fromStop = bus.stops.find((stop) => normalize(stop.name) === normalize(from));
+          const toStop = bus.stops.find((stop) => normalize(stop.name) === normalize(to));
+          const distanceKmValue = calculateTicketDistanceKm(fromStop, toStop);
+          const farePerPassenger = getTicketFareForDistance(distanceKmValue);
+          const totalFare = farePerPassenger * passengers;
+
+          const before = bus.occupancy;
+          const ticket = createTicketEvent(bus, from, to, passengers);
+          const after = bus.occupancy;
+
+          const event = {
+            id: ticket.id,
+            busNumber: busNumber,
+            action: "board",
+            passengers,
+            from: ticket.boardingStop,
+            to: ticket.destinationStop,
+            before,
+            after,
+            status: after > bus.capacity ? "overcapacity" : "active",
+            distanceKm: Number(distanceKmValue.toFixed(2)),
+            farePerPassenger,
+            totalFare,
+            timestamp: ticket.issuedAt,
+          };
+
+          ticketingEvents.unshift(event);
+          if (ticketingEvents.length > 50) ticketingEvents.length = 50;
+
+          sendJSON(res, 200, {
+            success: true,
+            event,
+            bus: getSimulatedBusData(bus),
+            recentEvents: ticketingEvents.slice(0, 10),
+          });
+          return;
+        } catch (error) {
+          sendJSON(res, 400, {
+            success: false,
+            message: error.message || "Unable to process ticketing event.",
+          });
+          return;
+        }
+      }
+
+      if (
+        pathname === "/api/ticketing/events" &&
+        req.method === "GET"
+      ) {
+        const user = getAuthenticatedUser(req);
+
+        if (!user || user.role !== "ticketing") {
+          sendJSON(res, 403, {
+            success: false,
+            message: "Ticketing staff access is required.",
+          });
+          return;
+        }
+
+        sendJSON(res, 200, {
+          success: true,
+          events: ticketingEvents.slice(0, 25),
+        });
+        return;
       }
 
       // ----------------------------------------------
@@ -1794,7 +2131,6 @@ async function initialize() {
 
     gtfsReady = true;
 
-    initializeDemoBuses();
 
     console.log("");
     console.log(
