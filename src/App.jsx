@@ -200,13 +200,46 @@ const [busOccupancies, setBusOccupancies] = useState({
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
 
+  const normalizeSearchStop = (value) => {
+    const normalized = String(value || "")
+      .toLowerCase()
+      .replace(/[()\/,-]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (
+      normalized.includes("kempegowda bus station") ||
+      normalized === "kempegowda bus station" ||
+      normalized === "kbs" ||
+      normalized.includes("majestic")
+    ) {
+      return "majestic";
+    }
+
+    if (
+      normalized === "kengeri" ||
+      normalized.includes("kengeri bus station") ||
+      normalized.includes("kengeri satellite town")
+    ) {
+      return "kengeri";
+    }
+
+    return normalized;
+  };
+
   const searchRealRoutes = async (from, to) => {
     setSearchLoading(true);
     setSearchError("");
 
     try {
+      // Passenger-facing stop names can be longer than the canonical
+      // BMTC/GTFS search aliases. Normalize only the API query and keep
+      // the original names for display.
+      const apiFrom = normalizeSearchStop(from);
+      const apiTo = normalizeSearchStop(to);
+
       const response = await fetch(
-        `${API_URL}/api/search?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+        `${API_URL}/api/search?from=${encodeURIComponent(apiFrom)}&to=${encodeURIComponent(apiTo)}`
       );
 
       if (!response.ok) {
@@ -245,6 +278,78 @@ const [busOccupancies, setBusOccupancies] = useState({
           occupancySource: route.occupancySource,
         };
       });
+
+      // Overlay the exhibition's live SmartOccupancy/GPS buses on top of
+      // the real GTFS route search. This gives searched buses the same
+      // live ETA and occupancy used by the tracking screen.
+      try {
+        const liveResponse = await fetch(`${API_URL}/api/buses`);
+        if (liveResponse.ok) {
+          const liveData = await liveResponse.json();
+
+          if (liveData.success && Array.isArray(liveData.buses)) {
+            const liveMatches = liveData.buses.filter((bus) => {
+              const routeText = String(bus.route || "");
+              const parts = routeText.split("→").map((part) => normalizeSearchStop(part));
+
+              return (
+                parts.length === 2 &&
+                parts[0] === apiFrom &&
+                parts[1] === apiTo
+              );
+            });
+
+            liveMatches.forEach((liveBus) => {
+              const existingIndex = mappedRoutes.findIndex(
+                (route) =>
+                  String(route.number).toUpperCase() ===
+                  String(liveBus.bus).toUpperCase()
+              );
+
+              const liveRouteStops = liveBus.routeStops || [];
+              const liveDistanceKm = calculateRouteDistanceKm(liveRouteStops);
+
+              const liveResult = {
+                number: liveBus.bus,
+                destination: to,
+                origin: from,
+                eta: `${liveBus.eta ?? 0} min`,
+                occupancy: liveBus.occupancyPercent ?? liveBus.occupancy ?? 0,
+                duration:
+                  liveDistanceKm > 0
+                    ? `${Math.max(1, Math.round((liveDistanceKm / (liveBus.speedKmh || 24)) * 60))} min`
+                    : "Live",
+                fare: getFareForDistance(liveDistanceKm),
+                distanceKm: liveDistanceKm.toFixed(1),
+                recommended: false,
+                routeId: liveBus.routeId || "",
+                routeName: liveBus.route || "",
+                headsign: liveBus.headsign || to,
+                directionId: "",
+                fromStop: liveBus.currentStop || from,
+                toStop: liveBus.nextStop || to,
+                numberOfStops: liveRouteStops.length,
+                routeStops: liveRouteStops,
+                dataSource: "BUSNETT Cloud",
+                occupancySource:
+                  liveBus.occupancySource || "SmartOccupancy",
+                etaSource: liveBus.etaSource || "Simulated GPS",
+              };
+
+              if (existingIndex >= 0) {
+                mappedRoutes[existingIndex] = {
+                  ...mappedRoutes[existingIndex],
+                  ...liveResult,
+                };
+              } else {
+                mappedRoutes.push(liveResult);
+              }
+            });
+          }
+        }
+      } catch (liveError) {
+        console.warn("BUSNETT live bus overlay unavailable:", liveError);
+      }
 
       setRouteResults(mappedRoutes);
     } catch (error) {
