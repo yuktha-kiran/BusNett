@@ -662,6 +662,33 @@ function getOrderedPatternStops(
       })
     );
 }
+// ======================================================
+// SMART OCCUPANCY
+// ======================================================
+
+const occupancy = new Map();
+
+function getOccupancy(routeNumber) {
+  if (!occupancy.has(routeNumber)) {
+    occupancy.set(
+      routeNumber,
+      Math.floor(Math.random() * 51) + 25
+    );
+  }
+
+  return occupancy.get(routeNumber);
+}
+
+function updateOccupancy() {
+  for (const [route, current] of occupancy) {
+    const change = Math.floor(Math.random() * 7) - 3;
+
+    occupancy.set(
+      route,
+      Math.max(15, Math.min(90, current + change))
+    );
+  }
+}
 
 // ======================================================
 // FIND DIRECT ROUTES
@@ -938,26 +965,28 @@ function findDirectRoutes(
 */
 
 const DEMO_BUS_CONFIG = {
-  "401K": {
+  "O EXP-226N": {
     capacity: 60,
     speedKmh: 24,
     startOccupancy: 32,
     from: "Kengeri",
     to: "Majestic",
   },
-  "500D": {
+
+  "226-Q": {
     capacity: 60,
     speedKmh: 22,
     startOccupancy: 41,
     from: "Kengeri",
     to: "Majestic",
   },
-  "500A": {
+
+  "221-G": {
     capacity: 60,
     speedKmh: 25,
     startOccupancy: 29,
     from: "Kengeri",
-    to: "Shivajinagar",
+    to: "Majestic",
   },
 };
 
