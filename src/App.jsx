@@ -1239,168 +1239,26 @@ function HomeScreen({ buses, onSearch, lastSynced, onNearby, onSaved, from, to, 
       </section>
 
 
-      <section
-        className="insight-card"
+      <div
         style={{
-          display: "block",
-          cursor: "default",
+          width: "100%",
+          marginTop: "4px",
+          overflow: "hidden",
         }}
       >
-        <div
+        <img
+          src="/busnett-bus-cloud.png"
+          alt="BUSNETT bus approaching a stop"
           style={{
-            display: "flex",
-            alignItems: "flex-start",
-            gap: "12px",
+            display: "block",
+            width: "100%",
+            height: "auto",
+            border: "none",
+            borderRadius: 0,
+            boxShadow: "none",
           }}
-        >
-          <div className="insight-icon">
-            <Users size={20} />
-          </div>
-
-          <div className="insight-content" style={{ flex: 1 }}>
-            <span>BUSNETT INTELLIGENCE</span>
-
-            <h3 style={{ marginBottom: "5px" }}>
-              {recommendation?.bus?.number || "Best available bus"} — Best overall choice
-            </h3>
-
-            <p>
-              {recommendation?.reason || "Best available option right now"}.
-            </p>
-          </div>
-        </div>
-
-        {recommendation?.bus && (
-          <>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
-                gap: "8px",
-                marginTop: "14px",
-              }}
-            >
-              <div
-                style={{
-                  background: "rgba(255,255,255,0.7)",
-                  borderRadius: "12px",
-                  padding: "9px",
-                }}
-              >
-                <Clock3 size={15} />
-                <strong
-                  style={{
-                    display: "block",
-                    marginTop: "4px",
-                    fontSize: "13px",
-                    color: "#0f172a",
-                  }}
-                >
-                  {recommendation.bus.eta}
-                </strong>
-                <span
-                  style={{
-                    fontSize: "9px",
-                    color: "#64748b",
-                  }}
-                >
-                  arrival
-                </span>
-              </div>
-
-              <div
-                style={{
-                  background: "rgba(255,255,255,0.7)",
-                  borderRadius: "12px",
-                  padding: "9px",
-                }}
-              >
-                <Users size={15} />
-                <strong
-                  style={{
-                    display: "block",
-                    marginTop: "4px",
-                    fontSize: "13px",
-                    color: "#0f172a",
-                  }}
-                >
-                  {recommendation.bus.occupancy}%
-                </strong>
-                <span
-                  style={{
-                    fontSize: "9px",
-                    color: "#64748b",
-                  }}
-                >
-                  occupancy
-                </span>
-              </div>
-
-              <div
-                style={{
-                  background: "rgba(255,255,255,0.7)",
-                  borderRadius: "12px",
-                  padding: "9px",
-                }}
-              >
-                <Navigation size={15} />
-                <strong
-                  style={{
-                    display: "block",
-                    marginTop: "4px",
-                    fontSize: "13px",
-                    color: "#0f172a",
-                  }}
-                >
-                  {recommendation.bus.duration}
-                </strong>
-                <span
-                  style={{
-                    fontSize: "9px",
-                    color: "#64748b",
-                  }}
-                >
-                  journey
-                </span>
-              </div>
-            </div>
-
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginTop: "12px",
-                paddingTop: "10px",
-                borderTop: "1px solid rgba(15,23,42,0.08)",
-              }}
-            >
-              <span
-                style={{
-                  fontSize: "10px",
-                  fontWeight: "700",
-                  color: "#64748b",
-                }}
-              >
-                Based on ETA + occupancy + journey time
-              </span>
-
-              <span
-                style={{
-                  fontSize: "10px",
-                  fontWeight: "800",
-                  color: "#16865b",
-                  background: "#e8f7f0",
-                  padding: "5px 8px",
-                  borderRadius: "8px",
-                }}
-              >
-                87% confidence
-              </span>
-            </div>
-          </>
-        )}
-      </section>
+        />
+      </div>
     </>
   );
 }
