@@ -1074,11 +1074,12 @@ function getTicketFareForDistance(distanceKm) {
   return 28;
 }
 
-function ensureTicketingBus(busNumber, from, to) {
-  const existing = simulatedBuses.get(busNumber);
+function ensureSharedBus(busNumber, from, to, source = "ticketing") {
+  const normalizedBusNumber = String(busNumber || "").trim();
+  const existing = simulatedBuses.get(normalizedBusNumber);
   if (existing) return existing;
 
-  const route = findDatasetRouteForTicket(busNumber, from, to);
+  const route = findDatasetRouteForTicket(normalizedBusNumber, from, to);
   if (!route || !Array.isArray(route.stops) || route.stops.length < 2) {
     return null;
   }
@@ -1105,14 +1106,18 @@ function ensureTicketingBus(busNumber, from, to) {
     segmentProgress: 0,
     lastUpdate: now,
     lastProcessedStop: boardingIndex - 1,
-    occupancy: 0,
+    occupancy: Math.max(0, Math.min(60, getOccupancy(route.routeNumber))),
     passengerTickets: [],
-    createdFromTicketing: true,
+    createdFrom: source,
     startedAt: now,
   };
 
-  simulatedBuses.set(busNumber, bus);
+  simulatedBuses.set(normalizedBusNumber, bus);
   return bus;
+}
+
+function activateSharedBus(busNumber, from, to) {
+  return ensureSharedBus(busNumber, from, to, "passenger");
 }
 
 function processStopTransactions(bus, stopIndex) {
@@ -1500,6 +1505,66 @@ const server =
       }
 
       // ----------------------------------------------
+      // SHARED BUS ACTIVATION
+      // ----------------------------------------------
+
+      if (pathname === "/api/buses/activate" && req.method === "POST") {
+        try {
+          const body = await readRequestBody(req);
+          const busNumber = String(body.busNumber || "").trim();
+          const from = String(body.from || "").trim();
+          const to = String(body.to || "").trim();
+
+          if (!busNumber || !from || !to) {
+            sendJSON(res, 400, {
+              success: false,
+              message: "Bus, from and to are required.",
+            });
+            return;
+          }
+
+          if (!gtfsReady) {
+            sendJSON(res, 503, {
+              success: false,
+              message: "BMTC dataset is still loading.",
+            });
+            return;
+          }
+
+          const route = findDatasetRouteForTicket(busNumber, from, to);
+          if (!route) {
+            sendJSON(res, 404, {
+              success: false,
+              message: `Route ${busNumber} with ${from} → ${to} was not found in the BMTC dataset.`,
+            });
+            return;
+          }
+
+          const bus = activateSharedBus(busNumber, from, to);
+          if (!bus) {
+            sendJSON(res, 400, {
+              success: false,
+              message: `Unable to activate ${busNumber} from the BMTC route data.`,
+            });
+            return;
+          }
+
+          sendJSON(res, 200, {
+            success: true,
+            message: "Shared bus state activated.",
+            bus: getSimulatedBusData(bus),
+          });
+          return;
+        } catch (error) {
+          sendJSON(res, 400, {
+            success: false,
+            message: error.message || "Unable to activate shared bus.",
+          });
+          return;
+        }
+      }
+
+      // ----------------------------------------------
       // PRIVATE TICKETING ROUTE LOOKUP
       // ----------------------------------------------
 
@@ -1637,7 +1702,7 @@ const server =
             return;
           }
 
-          const bus = ensureTicketingBus(busNumber, from, to);
+          const bus = ensureSharedBus(busNumber, from, to, "ticketing");
           if (!bus) {
             sendJSON(res, 400, {
               success: false,

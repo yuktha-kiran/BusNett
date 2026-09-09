@@ -360,6 +360,65 @@ const [busOccupancies, setBusOccupancies] = useState({
 
           setCloudOccupancies(occupancyData);
           setBusOccupancies(occupancyData);
+
+          setLiveEtas((previous) => {
+            const next = { ...previous };
+            data.buses.forEach((bus) => {
+              next[bus.bus] = Number(bus.eta ?? next[bus.bus] ?? 0);
+            });
+            return next;
+          });
+
+          setRouteResults((previousRoutes) =>
+            previousRoutes.map((route) => {
+              const live = data.buses.find(
+                (bus) =>
+                  String(bus.bus).toUpperCase() ===
+                  String(route.number).toUpperCase()
+              );
+              if (!live) return route;
+
+              return {
+                ...route,
+                eta: `${live.eta ?? 0} min`,
+                occupancy:
+                  live.occupancyPercent ?? live.occupancy ?? route.occupancy,
+                dataSource: "BUSNETT Cloud",
+                occupancySource: live.occupancySource || "SmartOccupancy",
+                etaSource: live.etaSource || "Simulated GPS",
+              };
+            })
+          );
+
+          setSelectedBus((previous) => {
+            if (!previous) return previous;
+
+            const live = data.buses.find(
+              (bus) =>
+                String(bus.bus).toUpperCase() ===
+                String(previous.number).toUpperCase()
+            );
+
+            if (!live) return previous;
+
+            return {
+              ...previous,
+              eta: `${live.eta ?? 0} min`,
+              occupancy:
+                live.occupancyPercent ??
+                live.occupancy ??
+                previous.occupancy,
+              origin: live.currentStop || previous.origin,
+              destination: live.headsign || previous.destination,
+              latitude: live.latitude,
+              longitude: live.longitude,
+              routeStops: live.routeStops || previous.routeStops,
+              dataSource: "BUSNETT Cloud",
+              occupancySource: live.occupancySource || "SmartOccupancy",
+              etaSource: live.etaSource || "Simulated GPS",
+            };
+          });
+
           setLastSynced(new Date(data.updatedAt));
         }
       } catch (error) {
@@ -627,7 +686,41 @@ const [busOccupancies, setBusOccupancies] = useState({
     setActiveTab(tab);
     setActiveScreen(tab);
   };
-const updateOccupancy = (busNumber, newOccupancy) => {
+const activateSharedBus = async (bus) => {
+    try {
+      const response = await fetch(`${API_URL}/api/buses/activate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          busNumber: bus.number,
+          from: bus.origin || bus.fromStop?.name || searchFrom,
+          to: bus.destination || bus.toStop?.name || searchTo,
+        }),
+      });
+
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      if (!data.success || !data.bus) return null;
+
+      setBusOccupancies((previous) => ({
+        ...previous,
+        [data.bus.bus]: data.bus.occupancyPercent ?? data.bus.occupancy ?? 0,
+      }));
+
+      setLiveEtas((previous) => ({
+        ...previous,
+        [data.bus.bus]: Number(data.bus.eta ?? parseInt(bus.eta) ?? 0),
+      }));
+
+      return data.bus;
+    } catch (error) {
+      console.warn("BUSNETT shared bus activation unavailable:", error);
+      return null;
+    }
+  };
+
+  const updateOccupancy = (busNumber, newOccupancy) => {
     const clampedOccupancy = Math.max(0, Math.min(100, newOccupancy));
 
     setBusOccupancies((prev) => ({
@@ -923,8 +1016,25 @@ const updateOccupancy = (busNumber, newOccupancy) => {
                     searchRealRoutes(from, to);
                   }}
                   onBack={() => setActiveScreen("home")}
-                  onSelectBus={(bus) => {
-                    setSelectedBus(bus);
+                  onSelectBus={async (bus) => {
+                    const liveBus = await activateSharedBus(bus);
+                    if (liveBus) {
+                      setSelectedBus({
+                        ...bus,
+                        number: liveBus.bus,
+                        eta: `${liveBus.eta ?? 0} min`,
+                        occupancy: liveBus.occupancyPercent ?? liveBus.occupancy ?? 0,
+                        routeId: liveBus.routeId || bus.routeId,
+                        routeStops: liveBus.routeStops || bus.routeStops,
+                        origin: liveBus.currentStop || bus.origin,
+                        destination: liveBus.headsign || bus.destination,
+                        dataSource: "BUSNETT Cloud",
+                        occupancySource: liveBus.occupancySource || "SmartOccupancy",
+                        etaSource: liveBus.etaSource || "Simulated GPS",
+                      });
+                    } else {
+                      setSelectedBus(bus);
+                    }
                     setActiveScreen("details");
                   }}
                 />
@@ -934,8 +1044,25 @@ const updateOccupancy = (busNumber, newOccupancy) => {
                 <NearbyBusesScreen
                   buses={displayBuses}
                   onBack={() => setActiveScreen("home")}
-                  onSelectBus={(bus) => {
-                    setSelectedBus(bus);
+                  onSelectBus={async (bus) => {
+                    const liveBus = await activateSharedBus(bus);
+                    if (liveBus) {
+                      setSelectedBus({
+                        ...bus,
+                        number: liveBus.bus,
+                        eta: `${liveBus.eta ?? 0} min`,
+                        occupancy: liveBus.occupancyPercent ?? liveBus.occupancy ?? 0,
+                        routeId: liveBus.routeId || bus.routeId,
+                        routeStops: liveBus.routeStops || bus.routeStops,
+                        origin: liveBus.currentStop || bus.origin,
+                        destination: liveBus.headsign || bus.destination,
+                        dataSource: "BUSNETT Cloud",
+                        occupancySource: liveBus.occupancySource || "SmartOccupancy",
+                        etaSource: liveBus.etaSource || "Simulated GPS",
+                      });
+                    } else {
+                      setSelectedBus(bus);
+                    }
                     setActiveScreen("details");
                   }}
                   onTrackBus={(bus) => {
@@ -2343,17 +2470,54 @@ function BusDetailsScreen({ bus, onBack, onTrack, userAccount, onSaveTrip, onReq
       ? `BUSNETT predicts higher occupancy toward ${bus.destination}.`
       : `BUSNETT predicts relatively stable occupancy toward ${bus.destination}.`;
 
-  const getStatus = (occupancy) => {
-    if (occupancy < 45) {
-      return "Plenty of space";
+  const getOccupancyVisual = (occupancy) => {
+    const value = Number(occupancy) || 0;
+
+    if (value >= 100) {
+      return {
+        status: "Overcrowded",
+        accent: "#c62828",
+        background: "#fff0f0",
+        border: "#f2a4a4",
+      };
     }
 
-    if (occupancy < 70) {
-      return "Moderately crowded";
+    if (value >= 90) {
+      return {
+        status: "Near capacity",
+        accent: "#dc4b24",
+        background: "#fff4ed",
+        border: "#f2b49d",
+      };
     }
 
-    return "High crowding";
+    if (value >= 70) {
+      return {
+        status: "High crowding",
+        accent: "#d59a00",
+        background: "#fff9e8",
+        border: "#ead28a",
+      };
+    }
+
+    if (value >= 45) {
+      return {
+        status: "Moderately crowded",
+        accent: "#16865b",
+        background: "#eef8f4",
+        border: "#b7ead1",
+      };
+    }
+
+    return {
+      status: "Plenty of space",
+      accent: "#16865b",
+      background: "#eef8f4",
+      border: "#b7ead1",
+    };
   };
+
+  const occupancyVisual = getOccupancyVisual(bus.occupancy);
 
   return (
     <>
@@ -2416,6 +2580,9 @@ function BusDetailsScreen({ bus, onBack, onTrack, userAccount, onSaveTrip, onReq
         style={{
           padding: "13px 15px",
           marginBottom: "12px",
+          background: occupancyVisual.background,
+          borderColor: occupancyVisual.border,
+          transition: "background 0.25s ease, border-color 0.25s ease",
         }}
       >
 
@@ -2423,12 +2590,23 @@ function BusDetailsScreen({ bus, onBack, onTrack, userAccount, onSaveTrip, onReq
 
           <div>
             <span>ESTIMATED OCCUPANCY</span>
-            <h3 style={{ fontSize: "28px", margin: "3px 0 0" }}>
+            <h3
+              style={{
+                fontSize: "28px",
+                margin: "3px 0 0",
+                color: occupancyVisual.accent,
+              }}
+            >
               {bus.occupancy}%
             </h3>
           </div>
 
-          <Users size={24} />
+          <Users
+            size={24}
+            style={{
+              color: occupancyVisual.accent,
+            }}
+          />
 
         </div>
 
@@ -2438,15 +2616,23 @@ function BusDetailsScreen({ bus, onBack, onTrack, userAccount, onSaveTrip, onReq
           <div
             className="occupancy-fill"
             style={{
-              width: `${bus.occupancy}%`,
+              width: `${Math.min(100, Math.max(0, Number(bus.occupancy) || 0))}%`,
+              background: occupancyVisual.accent,
+              transition: "width 0.35s ease, background 0.25s ease",
             }}
           />
 
         </div>
 
 
-        <div className="occupancy-status">
-          {getStatus(bus.occupancy)}
+        <div
+          className="occupancy-status"
+          style={{
+            color: occupancyVisual.accent,
+            fontWeight: "700",
+          }}
+        >
+          {occupancyVisual.status}
         </div>
 
       </section>
@@ -3691,10 +3877,10 @@ function TicketingPortal() {
           style={{
             width: "100%",
             maxWidth: "390px",
-            background: "#ffffff",
-            border: "1px solid #dbe3ea",
+            background: "#f9fffc",
+            border: "1px solid #b7ead1",
             borderRadius: "22px",
-            padding: "22px",
+            padding: "24px",
             boxSizing: "border-box",
             boxShadow: "0 18px 45px rgba(15,23,42,0.10)",
           }}
@@ -3702,7 +3888,7 @@ function TicketingPortal() {
           <span style={{ display: "block", color: "#16865b", fontSize: "10px", fontWeight: "900", letterSpacing: "1px" }}>
             PRIVATE ACCESS
           </span>
-          <h2 style={{ margin: "6px 0 5px", color: "#0f172a" }}>BUSNETT Ticketing</h2>
+          <h2 style={{ margin: "6px 0 5px", color: "#0f3d78" }}>BUSNETT Ticketing</h2>
           <p style={{ margin: "0 0 18px", color: "#64748b", fontSize: "12px", lineHeight: 1.5 }}>
             Staff-only portal for entering passenger-flow events.
           </p>
@@ -3713,7 +3899,7 @@ function TicketingPortal() {
               value={username}
               onChange={(event) => setUsername(event.target.value)}
               autoComplete="username"
-              style={{ display: "block", width: "100%", boxSizing: "border-box", marginTop: "5px", padding: "11px", border: "1px solid #dbe3ea", borderRadius: "10px", color: "#0f172a" }}
+              style={{ display: "block", width: "100%", boxSizing: "border-box", marginTop: "5px", padding: "11px", border: "1px solid #b7ead1", borderRadius: "10px", background: "#eef8f4", color: "#0f172a", outline: "none" }}
             />
           </label>
 
@@ -3724,7 +3910,7 @@ function TicketingPortal() {
               onChange={(event) => setPassword(event.target.value)}
               type="password"
               autoComplete="current-password"
-              style={{ display: "block", width: "100%", boxSizing: "border-box", marginTop: "5px", padding: "11px", border: "1px solid #dbe3ea", borderRadius: "10px", color: "#0f172a" }}
+              style={{ display: "block", width: "100%", boxSizing: "border-box", marginTop: "5px", padding: "11px", border: "1px solid #b7ead1", borderRadius: "10px", background: "#eef8f4", color: "#0f172a", outline: "none" }}
             />
           </label>
 
@@ -3733,7 +3919,7 @@ function TicketingPortal() {
           <button
             type="submit"
             disabled={loading}
-            style={{ width: "100%", marginTop: "14px", border: "none", borderRadius: "11px", padding: "12px", background: "#16865b", color: "#ffffff", fontWeight: "800", fontSize: "12px", cursor: loading ? "wait" : "pointer" }}
+            style={{ width: "100%", marginTop: "14px", border: "none", borderRadius: "11px", padding: "12px", background: "#159b63", color: "#ffffff", fontWeight: "800", fontSize: "12px", cursor: loading ? "wait" : "pointer", boxShadow: "0 8px 18px rgba(21,155,99,0.18)" }}
           >
             {loading ? "Signing in..." : "Enter Ticketing Mode"}
           </button>
@@ -3791,6 +3977,15 @@ function TicketingPortal() {
                   setSelectedBus(value);
                   setError("");
                   setMessage("");
+
+                  if (!value.trim()) {
+                    setRouteStops([]);
+                    setFromStop("");
+                    setToStop("");
+                    loadRouteOptions(token, "");
+                    return;
+                  }
+
                   loadRouteOptions(token, value);
 
                   const exact = routeOptions.find(
@@ -3802,7 +3997,9 @@ function TicketingPortal() {
                   if (exact) {
                     loadRouteStops(exact.routeNumber, token);
                   } else {
-                    loadRouteStops(value, token);
+                    setRouteStops([]);
+                    setFromStop("");
+                    setToStop("");
                   }
                 }}
                 placeholder="Enter BMTC route number"
@@ -3823,7 +4020,21 @@ function TicketingPortal() {
                 FROM
                 <select
                   value={fromStop}
-                  onChange={(event) => setFromStop(event.target.value)}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setFromStop(value);
+
+                    const fromIndex = routeStops.findIndex(
+                      (stop) => stop.name === value
+                    );
+                    const toIndex = routeStops.findIndex(
+                      (stop) => stop.name === toStop
+                    );
+
+                    if (toIndex >= 0 && (fromIndex < 0 || toIndex <= fromIndex)) {
+                      setToStop("");
+                    }
+                  }}
                   disabled={!routeStops.length}
                   style={{ display: "block", width: "100%", boxSizing: "border-box", marginTop: "5px", padding: "10px", border: "1px solid #dbe3ea", borderRadius: "10px", background: "#ffffff", color: "#0f172a" }}
                 >
@@ -3842,9 +4053,18 @@ function TicketingPortal() {
                   style={{ display: "block", width: "100%", boxSizing: "border-box", marginTop: "5px", padding: "10px", border: "1px solid #dbe3ea", borderRadius: "10px", background: "#ffffff", color: "#0f172a" }}
                 >
                   <option value="">Select destination station</option>
-                  {routeStops.map((stop) => (
-                    <option key={`to-${stop.id}`} value={stop.name}>{stop.name}</option>
-                  ))}
+                  {routeStops.map((stop, index) => {
+                    const fromIndex = routeStops.findIndex(
+                      (item) => item.name === fromStop
+                    );
+                    if (fromIndex >= 0 && index <= fromIndex) return null;
+
+                    return (
+                      <option key={`to-${stop.id}`} value={stop.name}>
+                        {stop.name}
+                      </option>
+                    );
+                  })}
                 </select>
               </label>
             </div>
